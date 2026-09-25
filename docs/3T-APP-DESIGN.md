@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Author** | M.L. |
-| **Status** | In build v0.10 (BOOO M5 complete) |
+| **Status** | In build v0.11 (BOOO M6 complete) |
 | **Date** | 2026-09-25 |
 | **Scope** | Phase A — full stack running end-to-end and tested on localhost via Docker Compose |
 | **Out of scope** | Phase B (AWS, IaC, GitHub Actions CI/CD, container orchestration, SSO) |
@@ -22,6 +22,7 @@
 | v0.8 | Commits are classified as **deployment commits** (shipped by ≥1 deployment) or **non-deployment commits** (D38). Deleting a service is blocked only by deployments; its non-deployment commits are deleted with it. |
 | v0.9 | M4 decisions (D39–D42): 401 challenge header and auth-before-body; ingest response shape; partial updates from events; concurrent first deliveries collapse to one row. Coverage now traces greenlets, so reported coverage reflects code run through SQLAlchemy's async layer. |
 | v0.10 | M5 decisions (D43–D48): time-series bucket assignment per metric; bands judge unrounded values and rounding is half-up; zero deployments give `per_day: null`; unknown `service_id` is 422; fractional window `days`; service filter as a constant SQL fragment. Golden datasets A, B, C pass exactly, and the weekly expectations for A are extended to every field. |
+| v0.11 | M6 decisions (D49–D54): readiness probe is waited on, never cancelled; asyncpg connect and command timeouts; DB-unreachable errors are 503; unhandled errors become a problem+json 500 in middleware; route labels rebuilt from the route pattern; inbound request IDs validated. `/readyz` body shape and log field rules documented in §7.2 and §13. |
 
 ---
 
@@ -305,14 +306,15 @@ It runs this *before* creating tables, which avoids needing role membership that
   - `PATCH` and `DELETE` require `If-Match: "<version>"`. A missing header returns `428 Precondition Required`; a mismatch returns `412 Precondition Failed`. Per RFC 9110, `If-Match: *` and comma-separated lists are accepted (D27).
   - Writes lock the row (`SELECT ... FOR UPDATE`) before comparing versions, so two writers holding the same ETag can't both succeed (D28).
   - ⚠ Do **not** use weak ETags (`W/"..."`). `If-Match` uses strong comparison (RFC 9110), so a weak ETag never matches and every write would fail with 412.
-- **Request ID:** accept an inbound `X-Request-ID`, or else generate a UUIDv4. Echo it in the response and include it in every log line. Also log `X-Amzn-Trace-Id` when present (the AWS load balancer adds it in Phase B).
+- **Request ID:** accept an inbound `X-Request-ID` if it matches `^[A-Za-z0-9._:-]{1,128}$`, or else generate a UUIDv4 (D54). Echo it in the response, including on 500s, and include it in every log line. Also log `X-Amzn-Trace-Id` when present (the AWS load balancer adds it in Phase B).
+- **Database unavailable:** a connection-level failure (refused, timed out, dropped) returns `503` problem+json with type `urn:dora:problem:database-unavailable` and `Retry-After: 5`, never a crash (D51). Unhandled errors return a `500` problem+json with no internal detail (D52).
 
 ### 7.2 Operational endpoints (root, not under `/api/v1`)
 
 | Method | Path | Behavior |
 |---|---|---|
 | GET | `/healthz` | **Liveness.** Returns `200 {"status":"ok"}` with no dependency checks and never touches the DB. The container `HEALTHCHECK` uses this endpoint (§10). |
-| GET | `/readyz` | **Readiness.** Runs `SELECT 1` with a 2s timeout. Returns `200 {"status":"ready","checks":{"database":"ok"}}`, or `503` naming the failed check. |
+| GET | `/readyz` | **Readiness.** Runs `SELECT 1` with a 2s timeout. Returns `200 {"status":"ready","checks":{"database":"ok"}}`, or `503 {"status":"not_ready","checks":{"database":"timeout"|"error"}}`. The probe is waited on, never cancelled, and at most one is in flight (D49). |
 | GET | `/metrics` | Prometheus exposition: request count and latency histogram labeled by **route template** (never the raw path), plus DB pool gauges. Not routed through nginx. |
 | GET | `/version` | `{"version": "<APP_VERSION>", "git_sha": "<GIT_SHA>", "build_time": "<BUILD_TIME>"}`, taken from build args. Lets you verify exactly which build is deployed, and later lets this app track its own deployments. |
 
@@ -701,6 +703,10 @@ One counted deployment whose single commit has `committed_at > finished_at`: lea
 ## 13. Observability (Phase A, app-level only)
 
 - **Logs:** JSON to stdout, one event per line, with fields `timestamp`, `level`, `logger`, `event`, `request_id`, `trace_id` (from `X-Amzn-Trace-Id` when present), `method`, `route` (template), `status`, `duration_ms`. No request bodies; never log `X-API-Key` or DB credentials.
+  - Uvicorn's and SQLAlchemy's standard-library loggers go through the same JSON renderer, so every line on stdout is JSON. The access log is one `request` event per request, written by the request middleware; Uvicorn's own access log is off.
+  - As a backstop, any field whose name contains `password`, `secret`, `api_key`, `authorization`, or `token` is replaced with `[redacted]`.
+  - `route` is the full template (`/api/v1/services/{service_id}`), or `unmatched` for unknown paths, so metric label cardinality stays bounded (D53).
+- **Metrics:** `http_requests_total{method,route,status}`, `http_request_duration_seconds{method,route}`, and pool gauges `db_pool_size`, `db_pool_checked_out`, `db_pool_checked_in`, `db_pool_overflow`, each in a per-app registry.
 - **Metrics:** `/metrics` per §7.2.
 - **Tracing:** not in Phase A. Keep the request-ID middleware structured so OpenTelemetry can augment it later.
 
@@ -873,6 +879,12 @@ If both pass, it posts `succeeded` with `finished_at = now`. If either fails, it
 | D46 | An unknown `service_id` filter on the metrics endpoints is 422 | Surfaces typos and stale links instead of silently showing an empty dashboard | Returning empty metrics |
 | D47 | The window's `days` is its exact, possibly fractional, length; bounds are normalized to UTC | Custom windows needn't be whole days, and `per_day` must match the window actually queried | Rounding the window to whole days |
 | D48 | The service filter is a constant SQL fragment added only when filtering; Ruff's S608 is suppressed for `app/dora/queries.py` alone | `(:id IS NULL OR ...)` defeats index use under generic plans, which matters for the §12 performance target; only module constants are interpolated | One query with a nullable-parameter predicate |
+| D49 | `/readyz` runs its database probe as a separate task and waits up to 2s for it without cancelling it; at most one probe is in flight | Found in testing: against a frozen database (paused container), cancelling the query left connection cleanup blocked on the server, so `asyncio.timeout(2)` never returned and readiness hung for the whole outage. Waiting instead of cancelling returns 503 on time; the single in-flight probe bounds connections during a long outage | `asyncio.timeout` around the probe; a new probe per request |
+| D50 | asyncpg connections use a 5s connect timeout and a 30s command timeout | asyncpg defaults to 60s to connect and no statement timeout, so an outage or partition would stall requests for a minute or forever | Relying on driver defaults |
+| D51 | `OperationalError`, `InterfaceError`, `OSError`, and `TimeoutError` map to a 503 problem+json with `Retry-After: 5` | A database outage is a temporary, retryable condition for clients and the UI, not a server bug | A generic 500 |
+| D52 | Unhandled exceptions become a problem+json 500 in the outermost application middleware | Starlette's catch-all handler runs outside user middleware, where the request ID is no longer attached; users need the ID to report a failure. No exception text reaches the client | FastAPI's `Exception` handler |
+| D53 | The route label is rebuilt from the matched route's own pattern: the literal request-path text before where the pattern matches, plus its template | FastAPI 0.141 nests included routers, so `scope["route"].path` is only `/services/{service_id}`. Private FastAPI internals were avoided | Reading FastAPI's private `_IncludedRouter`; labeling by raw path |
+| D54 | An inbound `X-Request-ID` is accepted only if it matches `^[A-Za-z0-9._:-]{1,128}$`; otherwise a UUIDv4 is generated | The ID is echoed in headers and written to logs, so arbitrary input could inject log noise or oversized headers | Accepting any value |
 
 ---
 
@@ -888,7 +900,7 @@ The build order of operations, referred to as **BOOO**. Work milestone by milest
 | M3 | Deployments CRUD + commit upsert + transitions + immutable fields | transition-matrix unit tests and integration tests green | ✅ done |
 | M4 | Ingest endpoint (API key, idempotency, stale-event handling) | replay and out-of-order tests green | ✅ done |
 | M5 | DORA engine (queries, bands, summary + timeseries) | **golden datasets A, B, C pass exactly** | ✅ done |
-| M6 | `/readyz`, `/metrics`, structured logging, request/trace IDs, UTC session, SSL config | E2E scenario 7 works manually | |
+| M6 | `/readyz`, `/metrics`, structured logging, request/trace IDs, UTC session, SSL config | E2E scenario 7 works manually || ✅ done |
 | M7 | Seed generator (normal + `--large`) | `make seed` produces the §10 profiles; perf check recorded | |
 | M8 | Frontend: API client + types, layout, Dashboard | dashboard renders seeded bands correctly | |
 | M9 | Frontend: Services, Deployments, Failures pages; conflict handling | Vitest green | |

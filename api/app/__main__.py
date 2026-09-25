@@ -18,8 +18,9 @@ def main() -> None:
         proxy_headers=True,
         forwarded_allow_ips=settings.forwarded_allow_ips,
         timeout_graceful_shutdown=20,
-        access_log=False,
+        access_log=False,  # RequestContextMiddleware writes the access log
         server_header=False,
+        log_config=None,  # keep app.logging's JSON configuration
     )
 
 

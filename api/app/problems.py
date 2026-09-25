@@ -15,7 +15,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, InterfaceError, OperationalError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 PROBLEM_JSON = "application/problem+json"
@@ -210,12 +210,16 @@ async def handle_integrity(request: Request, exc: Exception) -> JSONResponse:
     )
 
 
-async def handle_unexpected(request: Request, exc: Exception) -> JSONResponse:
-    log.exception("unhandled_exception", exc_info=exc)
+async def handle_database_unavailable(request: Request, exc: Exception) -> JSONResponse:
+    """The database is down or unreachable: a 503 the UI can show as an error
+    state, never a crash. Liveness (/healthz) is unaffected (D1)."""
+    log.warning("database_unavailable", error=type(exc).__name__)
     return problem_response(
         request,
-        HTTPStatus.INTERNAL_SERVER_ERROR,
-        detail="An unexpected error occurred.",
+        HTTPStatus.SERVICE_UNAVAILABLE,
+        type_=f"{TYPE_PREFIX}database-unavailable",
+        detail="The database is unavailable. Try again shortly.",
+        headers={"Retry-After": "5"},
     )
 
 
@@ -224,7 +228,10 @@ def install_problem_handlers(app: FastAPI) -> None:
     app.add_exception_handler(RequestValidationError, handle_validation)
     app.add_exception_handler(StarletteHTTPException, handle_http)
     app.add_exception_handler(IntegrityError, handle_integrity)
-    app.add_exception_handler(Exception, handle_unexpected)
+    # Unhandled exceptions become a 500 in RequestContextMiddleware, which can
+    # still attach the request ID. Connection-level failures are a 503.
+    for exc_type in (OperationalError, InterfaceError, OSError, TimeoutError):
+        app.add_exception_handler(exc_type, handle_database_unavailable)
 
 
 def problem_responses(*statuses: int) -> dict[int | str, dict[str, Any]]:

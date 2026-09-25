@@ -19,6 +19,9 @@ from sqlalchemy.pool import NullPool
 
 from app.config import DatabaseSettings
 
+CONNECT_TIMEOUT_SECONDS = 5
+COMMAND_TIMEOUT_SECONDS = 30
+
 
 def database_url(settings: DatabaseSettings) -> URL:
     return URL.create(
@@ -48,7 +51,14 @@ def connect_args(settings: DatabaseSettings, search_path: str | None = None) -> 
     server_settings = {"timezone": "UTC", "application_name": "dora-api"}
     if search_path is not None:
         server_settings["search_path"] = search_path
-    return {"ssl": ssl_argument(settings), "server_settings": server_settings}
+    return {
+        "ssl": ssl_argument(settings),
+        "server_settings": server_settings,
+        # asyncpg waits 60s to connect by default and forever on a statement;
+        # bound both so a DB outage or network partition becomes a 503, not a hang.
+        "timeout": CONNECT_TIMEOUT_SECONDS,
+        "command_timeout": COMMAND_TIMEOUT_SECONDS,
+    }
 
 
 def create_engine(

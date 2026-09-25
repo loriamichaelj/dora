@@ -68,3 +68,19 @@ def test_ingest_race_classifier() -> None:
     assert _is_external_id_race(unique)
     other = IntegrityError("INSERT", {}, FakeDbapiError("23505", "uq_service_sha"))
     assert not _is_external_id_race(other)
+
+
+def test_route_template_rebuilds_the_router_prefix() -> None:
+    import re
+
+    from app.observability import UNMATCHED_ROUTE, route_template
+
+    class FakeRoute:
+        path_format = "/services/{service_id}"
+        path_regex = re.compile(r"^/services/(?P<service_id>[^/]+)$")
+
+    nested = {"route": FakeRoute(), "path": "/api/v1/services/0192"}
+    assert route_template(nested) == "/api/v1/services/{service_id}"
+    top_level = {"route": FakeRoute(), "path": "/services/0192"}
+    assert route_template(top_level) == "/services/{service_id}"
+    assert route_template({"path": "/nope"}) == UNMATCHED_ROUTE
