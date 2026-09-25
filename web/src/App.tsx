@@ -1,11 +1,16 @@
-import styles from './App.module.css';
+import { type QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { useState } from 'react';
+import { createBrowserRouter, RouterProvider } from 'react-router';
 
-// Placeholder shell until the dashboard lands in M8.
-export function App() {
+import { createQueryClient } from './api/queries';
+import { routes } from './routes';
+
+export function App({ queryClient }: { queryClient?: QueryClient }) {
+  const [client] = useState(() => queryClient ?? createQueryClient());
+  const [router] = useState(() => createBrowserRouter(routes));
   return (
-    <main className={styles.shell}>
-      <h1>DORA Deployment Tracker</h1>
-      <p>The dashboard is under construction.</p>
-    </main>
+    <QueryClientProvider client={client}>
+      <RouterProvider router={router} />
+    </QueryClientProvider>
   );
 }

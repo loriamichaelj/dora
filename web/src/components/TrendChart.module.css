@@ -1,0 +1,18 @@
+.figure {
+  margin: 0;
+  padding: var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.caption {
+  margin-bottom: var(--space-2);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.plot {
+  width: 100%;
+  min-height: 200px;
+}

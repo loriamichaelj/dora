@@ -1,0 +1,74 @@
+:root {
+  --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', Menlo, monospace;
+
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --border: #dde1e6;
+  --text: #1b1f24;
+  --text-muted: #5b6470;
+  --accent: #2456c4;
+  --accent-soft: #e8eefb;
+  --danger: #b42318;
+  --danger-soft: #fdecea;
+
+  /* Band colors always travel with a text label; color is never the only signal. */
+  --band-elite-bg: #dcf5e7;
+  --band-elite-fg: #146c3c;
+  --band-high-bg: #dbeefe;
+  --band-high-fg: #145a91;
+  --band-medium-bg: #fdf1d6;
+  --band-medium-fg: #845400;
+  --band-low-bg: #fde4e1;
+  --band-low-fg: #9b2016;
+  --band-none-bg: #eceef1;
+  --band-none-fg: #5b6470;
+
+  --radius: 10px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.45;
+}
+
+h1,
+h2,
+h3 {
+  line-height: 1.2;
+  margin: 0;
+}
+
+a {
+  color: var(--accent);
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}

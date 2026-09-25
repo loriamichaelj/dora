@@ -20,5 +20,8 @@ export default defineConfig({
     globals: true,
     setupFiles: ['./src/test/setup.ts'],
     include: ['src/**/*.test.{ts,tsx}'],
+    // West of UTC on purpose: local-time bugs (a UTC Monday shown as Sunday)
+    // can't hide behind a CI machine that happens to run in UTC.
+    env: { TZ: 'America/Los_Angeles' },
   },
 });

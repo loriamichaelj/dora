@@ -8,6 +8,8 @@ SHELL := /bin/bash
 COMPOSE ?= docker compose
 UV := uv run --locked
 REPORTS := $(CURDIR)/reports
+OPENAPI_JSON := web/src/api/openapi.json
+SCHEMA_TS := web/src/api/schema.d.ts
 
 # Build info, captured once at parse time (before any build starts) and
 # passed to `docker compose build` through build.args interpolation.
@@ -26,7 +28,7 @@ endif
 export GIT_SHA BUILD_TIME APP_VERSION DEPLOY_STARTED_AT
 
 .PHONY: help up down reset logs migrate migration seed seed-large analyze perf lint lint-api \
-        lint-web fmt test test-api test-web ci check-env check-node
+        lint-web fmt test test-api test-web openapi openapi-check ci check-env check-node
 
 help: ## List targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk -F':.*?## ' '{printf "  %-14s %s\n", $$1, $$2}'
@@ -92,6 +94,26 @@ fmt: check-node web/node_modules/.package-lock.json ## Auto-format api and web
 	cd api && $(UV) ruff format .
 	cd web && npm run --silent format
 
+# ---- API contract ----
+
+# Exported without starting a server. The placeholder key only satisfies the
+# settings check; nothing is served. openapi-typescript runs from its own
+# package (web/tools/openapi) because it needs TypeScript 5 and the app uses 6.
+openapi: check-node web/tools/openapi/node_modules/.package-lock.json ## Regenerate the OpenAPI schema and TS types
+	cd api && INGEST_API_KEY=openapi-export-placeholder-000000000000 $(UV) python -c \
+		'import json; from app.main import app; open("../$(OPENAPI_JSON)", "w").write(json.dumps(app.openapi(), indent=2) + "\n")'
+	cd web/tools/openapi && npx --no-install openapi-typescript ../../src/api/openapi.json \
+		-o ../../src/api/schema.d.ts --silent
+
+# Compares the regenerated files with the index (committed or staged), so on a
+# fresh CI checkout this is a comparison with HEAD.
+openapi-check: openapi ## Fail if the committed API contract is out of date
+	@if ! git diff --quiet -- $(OPENAPI_JSON) $(SCHEMA_TS) || \
+		[ -n "$$(git ls-files --others --exclude-standard -- $(OPENAPI_JSON) $(SCHEMA_TS))" ]; then \
+		git --no-pager diff --stat -- $(OPENAPI_JSON) $(SCHEMA_TS); \
+		echo "error: the API contract changed; run 'make openapi' and commit the result" >&2; exit 1; \
+	fi
+
 # ---- tests ----
 
 test: test-api test-web ## All test suites
@@ -107,12 +129,15 @@ test-web: check-node web/node_modules/.package-lock.json ## Vitest -> reports/
 	cd web && npx vitest run --reporter=default --reporter=junit \
 		--outputFile.junit=$(REPORTS)/junit-web.xml
 
-ci: lint test ## Single entry point for CI
+ci: lint openapi-check test ## Single entry point for CI
 
 # ---- helpers ----
 
 web/node_modules/.package-lock.json: web/package.json web/package-lock.json
 	cd web && npm ci --no-audit --no-fund
+
+web/tools/openapi/node_modules/.package-lock.json: web/tools/openapi/package.json web/tools/openapi/package-lock.json
+	cd web/tools/openapi && npm ci --no-audit --no-fund
 
 check-env:
 	@test -f .env || { echo "error: .env is missing. Run: cp .env.example .env" >&2; exit 1; }

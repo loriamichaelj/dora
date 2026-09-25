@@ -1,0 +1,3868 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "DORA Deployment Tracker",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/healthz": {
+      "get": {
+        "tags": [
+          "operational"
+        ],
+        "summary": "Healthz",
+        "description": "Liveness only: never touches the database (D1).",
+        "operationId": "healthz_healthz_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LivenessResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/readyz": {
+      "get": {
+        "tags": [
+          "operational"
+        ],
+        "summary": "Readyz",
+        "description": "Readiness: `SELECT 1` within 2 seconds. For traffic routing, never for\ncontainer health, so a database blip can't get every API container killed.\n\nThe probe runs as its own task and is waited on, never cancelled: cancelling\na query against a frozen server leaves connection cleanup blocked on that\nserver, which would hang this endpoint for as long as the outage lasts. At\nmost one probe is in flight, so repeated checks during an outage can't pile\nup connections (D49).",
+        "operationId": "readyz_readyz_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadinessResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "A dependency is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadinessResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/version": {
+      "get": {
+        "tags": [
+          "operational"
+        ],
+        "summary": "Version",
+        "operationId": "version_version_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VersionResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/services": {
+      "get": {
+        "tags": [
+          "services"
+        ],
+        "summary": "List Services",
+        "operationId": "list_services_api_v1_services_get",
+        "parameters": [
+          {
+            "name": "owner_team",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Owner Team"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Slug or name contains",
+              "title": "Q"
+            },
+            "description": "Slug or name contains"
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^-?(name|created_at)$",
+              "default": "name",
+              "title": "Sort"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "description": "Page size",
+              "default": 50,
+              "title": "Limit"
+            },
+            "description": "Page size"
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Items to skip",
+              "default": 0,
+              "title": "Offset"
+            },
+            "description": "Items to skip"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_ServiceOut_"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {},
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "services"
+        ],
+        "summary": "Create Service",
+        "operationId": "create_service_api_v1_services_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ServiceCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {},
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {},
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/services/{service_id}": {
+      "get": {
+        "tags": [
+          "services"
+        ],
+        "summary": "Get Service",
+        "operationId": "get_service_api_v1_services__service_id__get",
+        "parameters": [
+          {
+            "name": "service_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Service Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {},
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {},
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "services"
+        ],
+        "summary": "Update Service",
+        "operationId": "update_service_api_v1_services__service_id__patch",
+        "parameters": [
+          {
+            "name": "service_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Service Id"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Current ETag, e.g. \"3\". Required for writes.",
+              "title": "If-Match"
+            },
+            "description": "Current ETag, e.g. \"3\". Required for writes."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ServiceUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {},
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {},
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "412": {
+            "content": {
+              "application/problem+json": {},
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Precondition Failed"
+          },
+          "428": {
+            "content": {
+              "application/problem+json": {},
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Precondition Required"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "services"
+        ],
+        "summary": "Delete Service",
+        "operationId": "delete_service_api_v1_services__service_id__delete",
+        "parameters": [
+          {
+            "name": "service_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Service Id"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Current ETag, e.g. \"3\". Required for writes.",
+              "title": "If-Match"
+            },
+            "description": "Current ETag, e.g. \"3\". Required for writes."
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {},
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {},
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {},
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "412": {
+            "content": {
+              "application/problem+json": {},
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Precondition Failed"
+          },
+          "428": {
+            "content": {
+              "application/problem+json": {},
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Precondition Required"
+          }
+        }
+      }
+    },
+    "/api/v1/deployments": {
+      "get": {
+        "tags": [
+          "deployments"
+        ],
+        "summary": "List Deployments",
+        "operationId": "list_deployments_api_v1_deployments_get",
+        "parameters": [
+          {
+            "name": "service_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Service Id"
+            }
+          },
+          {
+            "name": "environment",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "development",
+                    "staging",
+                    "production"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Environment"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "in_progress",
+                    "succeeded",
+                    "failed",
+                    "rolled_back"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "planned",
+                    "remediation"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Kind"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "started_at >= from (inclusive)",
+              "title": "From"
+            },
+            "description": "started_at >= from (inclusive)"
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "started_at < to (exclusive)",
+              "title": "To"
+            },
+            "description": "started_at < to (exclusive)"
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^-?(started_at|finished_at)$",
+              "default": "-started_at",
+              "title": "Sort"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "description": "Page size",
+              "default": 50,
+              "title": "Limit"
+            },
+            "description": "Page size"
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Items to skip",
+              "default": 0,
+              "title": "Offset"
+            },
+            "description": "Items to skip"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_DeploymentOut_"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {},
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "deployments"
+        ],
+        "summary": "Create Deployment",
+        "operationId": "create_deployment_api_v1_deployments_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeploymentCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {},
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {},
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/deployments/{deployment_id}": {
+      "get": {
+        "tags": [
+          "deployments"
+        ],
+        "summary": "Get Deployment",
+        "operationId": "get_deployment_api_v1_deployments__deployment_id__get",
+        "parameters": [
+          {
+            "name": "deployment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Deployment Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {},
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {},
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "deployments"
+        ],
+        "summary": "Update Deployment",
+        "operationId": "update_deployment_api_v1_deployments__deployment_id__patch",
+        "parameters": [
+          {
+            "name": "deployment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Deployment Id"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Current ETag, e.g. \"3\". Required for writes.",
+              "title": "If-Match"
+            },
+            "description": "Current ETag, e.g. \"3\". Required for writes."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeploymentUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {},
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {},
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {},
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "412": {
+            "content": {
+              "application/problem+json": {},
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Precondition Failed"
+          },
+          "428": {
+            "content": {
+              "application/problem+json": {},
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Precondition Required"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "deployments"
+        ],
+        "summary": "Delete Deployment",
+        "operationId": "delete_deployment_api_v1_deployments__deployment_id__delete",
+        "parameters": [
+          {
+            "name": "deployment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Deployment Id"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Current ETag, e.g. \"3\". Required for writes.",
+              "title": "If-Match"
+            },
+            "description": "Current ETag, e.g. \"3\". Required for writes."
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {},
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {},
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {},
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "412": {
+            "content": {
+              "application/problem+json": {},
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Precondition Failed"
+          },
+          "428": {
+            "content": {
+              "application/problem+json": {},
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Precondition Required"
+          }
+        }
+      }
+    },
+    "/api/v1/failures": {
+      "get": {
+        "tags": [
+          "failures"
+        ],
+        "summary": "List Failures",
+        "operationId": "list_failures_api_v1_failures_get",
+        "parameters": [
+          {
+            "name": "service_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Service Id"
+            }
+          },
+          {
+            "name": "deployment_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Deployment Id"
+            }
+          },
+          {
+            "name": "severity",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "sev1",
+                    "sev2",
+                    "sev3",
+                    "sev4"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Severity"
+            }
+          },
+          {
+            "name": "open",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "true: unresolved; false: resolved",
+              "title": "Open"
+            },
+            "description": "true: unresolved; false: resolved"
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^-?(detected_at|created_at)$",
+              "default": "-detected_at",
+              "title": "Sort"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "description": "Page size",
+              "default": 50,
+              "title": "Limit"
+            },
+            "description": "Page size"
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Items to skip",
+              "default": 0,
+              "title": "Offset"
+            },
+            "description": "Items to skip"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_FailureOut_"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {},
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "failures"
+        ],
+        "summary": "Create Failure",
+        "operationId": "create_failure_api_v1_failures_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FailureCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {},
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {},
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/failures/{failure_id}": {
+      "get": {
+        "tags": [
+          "failures"
+        ],
+        "summary": "Get Failure",
+        "operationId": "get_failure_api_v1_failures__failure_id__get",
+        "parameters": [
+          {
+            "name": "failure_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Failure Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {},
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {},
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "failures"
+        ],
+        "summary": "Update Failure",
+        "operationId": "update_failure_api_v1_failures__failure_id__patch",
+        "parameters": [
+          {
+            "name": "failure_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Failure Id"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Current ETag, e.g. \"3\". Required for writes.",
+              "title": "If-Match"
+            },
+            "description": "Current ETag, e.g. \"3\". Required for writes."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FailureUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {},
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {},
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {},
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "412": {
+            "content": {
+              "application/problem+json": {},
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Precondition Failed"
+          },
+          "428": {
+            "content": {
+              "application/problem+json": {},
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Precondition Required"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "failures"
+        ],
+        "summary": "Delete Failure",
+        "operationId": "delete_failure_api_v1_failures__failure_id__delete",
+        "parameters": [
+          {
+            "name": "failure_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Failure Id"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Current ETag, e.g. \"3\". Required for writes.",
+              "title": "If-Match"
+            },
+            "description": "Current ETag, e.g. \"3\". Required for writes."
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {},
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {},
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "412": {
+            "content": {
+              "application/problem+json": {},
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Precondition Failed"
+          },
+          "428": {
+            "content": {
+              "application/problem+json": {},
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Precondition Required"
+          }
+        }
+      }
+    },
+    "/api/v1/events/deployments": {
+      "post": {
+        "tags": [
+          "ingest"
+        ],
+        "summary": "Ingest Deployment Event",
+        "operationId": "ingest_deployment_event_api_v1_events_deployments_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeploymentEvent"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngestResult"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Deployment created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngestResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Content",
+            "content": {
+              "application/problem+json": {},
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {},
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {},
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "IngestApiKey": []
+          }
+        ]
+      }
+    },
+    "/api/v1/metrics/dora": {
+      "get": {
+        "tags": [
+          "metrics"
+        ],
+        "summary": "Dora Summary",
+        "operationId": "dora_summary_api_v1_metrics_dora_get",
+        "parameters": [
+          {
+            "name": "service_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Omit for org-wide metrics",
+              "title": "Service Id"
+            },
+            "description": "Omit for org-wide metrics"
+          },
+          {
+            "name": "environment",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "development",
+                "staging",
+                "production"
+              ],
+              "type": "string",
+              "default": "production",
+              "title": "Environment"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Window start (inclusive). Default: `to` minus 30 days",
+              "title": "From"
+            },
+            "description": "Window start (inclusive). Default: `to` minus 30 days"
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Window end (exclusive). Default: now",
+              "title": "To"
+            },
+            "description": "Window end (exclusive). Default: now"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoraSummary"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {},
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          }
+        }
+      }
+    },
+    "/api/v1/metrics/dora/timeseries": {
+      "get": {
+        "tags": [
+          "metrics"
+        ],
+        "summary": "Dora Timeseries",
+        "operationId": "dora_timeseries_api_v1_metrics_dora_timeseries_get",
+        "parameters": [
+          {
+            "name": "service_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Omit for org-wide metrics",
+              "title": "Service Id"
+            },
+            "description": "Omit for org-wide metrics"
+          },
+          {
+            "name": "environment",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "development",
+                "staging",
+                "production"
+              ],
+              "type": "string",
+              "default": "production",
+              "title": "Environment"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Window start (inclusive). Default: `to` minus 30 days",
+              "title": "From"
+            },
+            "description": "Window start (inclusive). Default: `to` minus 30 days"
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Window end (exclusive). Default: now",
+              "title": "To"
+            },
+            "description": "Window end (exclusive). Default: now"
+          },
+          {
+            "name": "bucket",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "day",
+                "week",
+                "month"
+              ],
+              "type": "string",
+              "default": "week",
+              "title": "Bucket"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoraTimeseries"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {},
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ChangeFailRate": {
+        "properties": {
+          "rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rate"
+          },
+          "failed_deployments": {
+            "type": "integer",
+            "title": "Failed Deployments"
+          },
+          "total_deployments": {
+            "type": "integer",
+            "title": "Total Deployments"
+          },
+          "band": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "elite",
+                  "high",
+                  "medium",
+                  "low"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Band"
+          }
+        },
+        "type": "object",
+        "required": [
+          "rate",
+          "failed_deployments",
+          "total_deployments",
+          "band"
+        ],
+        "title": "ChangeFailRate"
+      },
+      "ChangeLeadTime": {
+        "properties": {
+          "median_hours": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Median Hours"
+          },
+          "p90_hours": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P90 Hours"
+          },
+          "sample_size": {
+            "type": "integer",
+            "title": "Sample Size"
+          },
+          "excluded_samples": {
+            "type": "integer",
+            "title": "Excluded Samples"
+          },
+          "band": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "elite",
+                  "high",
+                  "medium",
+                  "low"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Band"
+          }
+        },
+        "type": "object",
+        "required": [
+          "median_hours",
+          "p90_hours",
+          "sample_size",
+          "excluded_samples",
+          "band"
+        ],
+        "title": "ChangeLeadTime"
+      },
+      "CommitIn": {
+        "properties": {
+          "sha": {
+            "type": "string",
+            "title": "Sha"
+          },
+          "committed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Committed At"
+          },
+          "author": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Author"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 1000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "sha",
+          "committed_at"
+        ],
+        "title": "CommitIn"
+      },
+      "CommitOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "sha": {
+            "type": "string",
+            "title": "Sha"
+          },
+          "committed_at": {
+            "type": "string",
+            "title": "Committed At"
+          },
+          "author": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Author"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "sha",
+          "committed_at",
+          "author",
+          "message"
+        ],
+        "title": "CommitOut"
+      },
+      "DeploymentCreate": {
+        "properties": {
+          "service_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Service Id"
+          },
+          "environment": {
+            "type": "string",
+            "enum": [
+              "development",
+              "staging",
+              "production"
+            ],
+            "title": "Environment"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "planned",
+              "remediation"
+            ],
+            "title": "Kind",
+            "default": "planned"
+          },
+          "release": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Release"
+          },
+          "head_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Head Sha"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "in_progress",
+              "succeeded",
+              "failed",
+              "rolled_back"
+            ],
+            "title": "Status"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Started At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "deployed_by": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deployed By"
+          },
+          "pipeline_url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2048,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pipeline Url"
+          },
+          "external_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "External Id"
+          },
+          "commits": {
+            "items": {
+              "$ref": "#/components/schemas/CommitIn"
+            },
+            "type": "array",
+            "maxItems": 500,
+            "title": "Commits"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "service_id",
+          "environment",
+          "release",
+          "status",
+          "started_at"
+        ],
+        "title": "DeploymentCreate"
+      },
+      "DeploymentDetail": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "service_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Service Id"
+          },
+          "environment": {
+            "type": "string",
+            "enum": [
+              "development",
+              "staging",
+              "production"
+            ],
+            "title": "Environment"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "planned",
+              "remediation"
+            ],
+            "title": "Kind"
+          },
+          "release": {
+            "type": "string",
+            "title": "Release"
+          },
+          "head_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Head Sha"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "in_progress",
+              "succeeded",
+              "failed",
+              "rolled_back"
+            ],
+            "title": "Status"
+          },
+          "started_at": {
+            "type": "string",
+            "title": "Started At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "deployed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deployed By"
+          },
+          "pipeline_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pipeline Url"
+          },
+          "external_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "External Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "title": "Updated At"
+          },
+          "commits": {
+            "items": {
+              "$ref": "#/components/schemas/CommitOut"
+            },
+            "type": "array",
+            "title": "Commits"
+          },
+          "failures": {
+            "items": {
+              "$ref": "#/components/schemas/FailureSummary"
+            },
+            "type": "array",
+            "title": "Failures"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "service_id",
+          "environment",
+          "kind",
+          "release",
+          "head_sha",
+          "status",
+          "started_at",
+          "finished_at",
+          "deployed_by",
+          "pipeline_url",
+          "external_id",
+          "version",
+          "created_at",
+          "updated_at",
+          "commits",
+          "failures"
+        ],
+        "title": "DeploymentDetail"
+      },
+      "DeploymentEvent": {
+        "properties": {
+          "service_slug": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{1,62}$",
+            "title": "Service Slug"
+          },
+          "external_id": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "External Id",
+            "description": "Idempotency key. For GitHub Actions: gha-<run_id>-<run_attempt>-<environment>"
+          },
+          "environment": {
+            "type": "string",
+            "enum": [
+              "development",
+              "staging",
+              "production"
+            ],
+            "title": "Environment"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "planned",
+              "remediation"
+            ],
+            "title": "Kind",
+            "default": "planned"
+          },
+          "release": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Release"
+          },
+          "head_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Head Sha"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "in_progress",
+              "succeeded",
+              "failed",
+              "rolled_back"
+            ],
+            "title": "Status"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Started At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "deployed_by": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deployed By"
+          },
+          "pipeline_url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2048,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pipeline Url"
+          },
+          "commits": {
+            "items": {
+              "$ref": "#/components/schemas/CommitIn"
+            },
+            "type": "array",
+            "maxItems": 500,
+            "title": "Commits"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "service_slug",
+          "external_id",
+          "environment",
+          "release",
+          "status",
+          "started_at"
+        ],
+        "title": "DeploymentEvent",
+        "description": "A pipeline's report of a deployment's state (\u00a77.6).\n\nIdentified by (service_slug, external_id). The first event for a pair\ncreates the deployment; later ones update it. Fields left out of a later\nevent are left unchanged."
+      },
+      "DeploymentFrequency": {
+        "properties": {
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          },
+          "per_day": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Per Day"
+          },
+          "deploy_days": {
+            "type": "integer",
+            "title": "Deploy Days"
+          },
+          "band": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "elite",
+                  "high",
+                  "medium",
+                  "low"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Band"
+          }
+        },
+        "type": "object",
+        "required": [
+          "count",
+          "per_day",
+          "deploy_days",
+          "band"
+        ],
+        "title": "DeploymentFrequency"
+      },
+      "DeploymentOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "service_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Service Id"
+          },
+          "environment": {
+            "type": "string",
+            "enum": [
+              "development",
+              "staging",
+              "production"
+            ],
+            "title": "Environment"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "planned",
+              "remediation"
+            ],
+            "title": "Kind"
+          },
+          "release": {
+            "type": "string",
+            "title": "Release"
+          },
+          "head_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Head Sha"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "in_progress",
+              "succeeded",
+              "failed",
+              "rolled_back"
+            ],
+            "title": "Status"
+          },
+          "started_at": {
+            "type": "string",
+            "title": "Started At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "deployed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deployed By"
+          },
+          "pipeline_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pipeline Url"
+          },
+          "external_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "External Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "service_id",
+          "environment",
+          "kind",
+          "release",
+          "head_sha",
+          "status",
+          "started_at",
+          "finished_at",
+          "deployed_by",
+          "pipeline_url",
+          "external_id",
+          "version",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "DeploymentOut"
+      },
+      "DeploymentUpdate": {
+        "properties": {
+          "service_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Service Id"
+          },
+          "environment": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "development",
+                  "staging",
+                  "production"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Environment"
+          },
+          "external_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "External Id"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "planned",
+                  "remediation"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
+          },
+          "release": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Release"
+          },
+          "head_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Head Sha"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "in_progress",
+                  "succeeded",
+                  "failed",
+                  "rolled_back"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "deployed_by": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deployed By"
+          },
+          "pipeline_url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2048,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pipeline Url"
+          },
+          "commits": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/CommitIn"
+                },
+                "type": "array",
+                "maxItems": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commits"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "DeploymentUpdate"
+      },
+      "DoraSummary": {
+        "properties": {
+          "window": {
+            "$ref": "#/components/schemas/Window"
+          },
+          "filters": {
+            "$ref": "#/components/schemas/Filters"
+          },
+          "band_set": {
+            "type": "string",
+            "title": "Band Set"
+          },
+          "deployment_frequency": {
+            "$ref": "#/components/schemas/DeploymentFrequency"
+          },
+          "change_lead_time": {
+            "$ref": "#/components/schemas/ChangeLeadTime"
+          },
+          "change_fail_rate": {
+            "$ref": "#/components/schemas/ChangeFailRate"
+          },
+          "failed_deployment_recovery_time": {
+            "$ref": "#/components/schemas/RecoveryTime"
+          },
+          "deployment_rework_rate": {
+            "$ref": "#/components/schemas/ReworkRate"
+          }
+        },
+        "type": "object",
+        "required": [
+          "window",
+          "filters",
+          "band_set",
+          "deployment_frequency",
+          "change_lead_time",
+          "change_fail_rate",
+          "failed_deployment_recovery_time",
+          "deployment_rework_rate"
+        ],
+        "title": "DoraSummary"
+      },
+      "DoraTimeseries": {
+        "properties": {
+          "window": {
+            "$ref": "#/components/schemas/Window"
+          },
+          "filters": {
+            "$ref": "#/components/schemas/Filters"
+          },
+          "bucket": {
+            "type": "string",
+            "enum": [
+              "day",
+              "week",
+              "month"
+            ],
+            "title": "Bucket"
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/TimeseriesPoint"
+            },
+            "type": "array",
+            "title": "Points"
+          }
+        },
+        "type": "object",
+        "required": [
+          "window",
+          "filters",
+          "bucket",
+          "points"
+        ],
+        "title": "DoraTimeseries"
+      },
+      "FailureCreate": {
+        "properties": {
+          "deployment_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Deployment Id"
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "sev1",
+              "sev2",
+              "sev3",
+              "sev4"
+            ],
+            "title": "Severity"
+          },
+          "summary": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Summary"
+          },
+          "detected_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Detected At"
+          },
+          "resolved_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved At"
+          },
+          "external_ref": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "External Ref"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "deployment_id",
+          "severity",
+          "summary",
+          "detected_at"
+        ],
+        "title": "FailureCreate"
+      },
+      "FailureOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "deployment_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Deployment Id"
+          },
+          "service_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Service Id"
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "sev1",
+              "sev2",
+              "sev3",
+              "sev4"
+            ],
+            "title": "Severity"
+          },
+          "summary": {
+            "type": "string",
+            "title": "Summary"
+          },
+          "detected_at": {
+            "type": "string",
+            "title": "Detected At"
+          },
+          "resolved_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved At"
+          },
+          "external_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "External Ref"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "deployment_id",
+          "service_id",
+          "severity",
+          "summary",
+          "detected_at",
+          "resolved_at",
+          "external_ref",
+          "version",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "FailureOut"
+      },
+      "FailureSummary": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "sev1",
+              "sev2",
+              "sev3",
+              "sev4"
+            ],
+            "title": "Severity"
+          },
+          "summary": {
+            "type": "string",
+            "title": "Summary"
+          },
+          "detected_at": {
+            "type": "string",
+            "title": "Detected At"
+          },
+          "resolved_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "severity",
+          "summary",
+          "detected_at",
+          "resolved_at"
+        ],
+        "title": "FailureSummary"
+      },
+      "FailureUpdate": {
+        "properties": {
+          "deployment_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deployment Id"
+          },
+          "severity": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "sev1",
+                  "sev2",
+                  "sev3",
+                  "sev4"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Severity"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Summary"
+          },
+          "detected_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detected At"
+          },
+          "resolved_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved At"
+          },
+          "external_ref": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "External Ref"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "FailureUpdate"
+      },
+      "FieldError": {
+        "properties": {
+          "location": {
+            "type": "string",
+            "title": "Location"
+          },
+          "field": {
+            "type": "string",
+            "title": "Field"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Type"
+          }
+        },
+        "type": "object",
+        "required": [
+          "location",
+          "field",
+          "message",
+          "type"
+        ],
+        "title": "FieldError"
+      },
+      "Filters": {
+        "properties": {
+          "service_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Service Id"
+          },
+          "environment": {
+            "type": "string",
+            "enum": [
+              "development",
+              "staging",
+              "production"
+            ],
+            "title": "Environment"
+          }
+        },
+        "type": "object",
+        "required": [
+          "service_id",
+          "environment"
+        ],
+        "title": "Filters"
+      },
+      "IngestResult": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "service_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Service Id"
+          },
+          "environment": {
+            "type": "string",
+            "enum": [
+              "development",
+              "staging",
+              "production"
+            ],
+            "title": "Environment"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "planned",
+              "remediation"
+            ],
+            "title": "Kind"
+          },
+          "release": {
+            "type": "string",
+            "title": "Release"
+          },
+          "head_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Head Sha"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "in_progress",
+              "succeeded",
+              "failed",
+              "rolled_back"
+            ],
+            "title": "Status"
+          },
+          "started_at": {
+            "type": "string",
+            "title": "Started At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "deployed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deployed By"
+          },
+          "pipeline_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pipeline Url"
+          },
+          "external_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "External Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "title": "Updated At"
+          },
+          "commits": {
+            "items": {
+              "$ref": "#/components/schemas/CommitOut"
+            },
+            "type": "array",
+            "title": "Commits"
+          },
+          "failures": {
+            "items": {
+              "$ref": "#/components/schemas/FailureSummary"
+            },
+            "type": "array",
+            "title": "Failures"
+          },
+          "ignored": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": "stale_event"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ignored",
+            "description": "Set when the event was older than the deployment's current state and was ignored. Not an error: retries and out-of-order delivery are normal."
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "service_id",
+          "environment",
+          "kind",
+          "release",
+          "head_sha",
+          "status",
+          "started_at",
+          "finished_at",
+          "deployed_by",
+          "pipeline_url",
+          "external_id",
+          "version",
+          "created_at",
+          "updated_at",
+          "commits",
+          "failures"
+        ],
+        "title": "IngestResult"
+      },
+      "LivenessResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "LivenessResponse"
+      },
+      "Page_DeploymentOut_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/DeploymentOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "limit",
+          "offset"
+        ],
+        "title": "Page[DeploymentOut]"
+      },
+      "Page_FailureOut_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/FailureOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "limit",
+          "offset"
+        ],
+        "title": "Page[FailureOut]"
+      },
+      "Page_ServiceOut_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ServiceOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "limit",
+          "offset"
+        ],
+        "title": "Page[ServiceOut]"
+      },
+      "ProblemDetail": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "title": "Type"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "status": {
+            "type": "integer",
+            "title": "Status"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "instance": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Instance"
+          },
+          "errors": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/FieldError"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Errors"
+          }
+        },
+        "type": "object",
+        "required": [
+          "type",
+          "title",
+          "status"
+        ],
+        "title": "ProblemDetail"
+      },
+      "ReadinessResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "not_ready"
+            ],
+            "title": "Status"
+          },
+          "checks": {
+            "additionalProperties": {
+              "type": "string",
+              "enum": [
+                "ok",
+                "timeout",
+                "error"
+              ]
+            },
+            "type": "object",
+            "title": "Checks"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "checks"
+        ],
+        "title": "ReadinessResponse"
+      },
+      "RecoveryTime": {
+        "properties": {
+          "median_hours": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Median Hours"
+          },
+          "sample_size": {
+            "type": "integer",
+            "title": "Sample Size"
+          },
+          "open_failures": {
+            "type": "integer",
+            "title": "Open Failures"
+          },
+          "band": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "elite",
+                  "high",
+                  "medium",
+                  "low"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Band"
+          }
+        },
+        "type": "object",
+        "required": [
+          "median_hours",
+          "sample_size",
+          "open_failures",
+          "band"
+        ],
+        "title": "RecoveryTime"
+      },
+      "ReworkRate": {
+        "properties": {
+          "rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rate"
+          },
+          "remediation_deployments": {
+            "type": "integer",
+            "title": "Remediation Deployments"
+          },
+          "total_deployments": {
+            "type": "integer",
+            "title": "Total Deployments"
+          },
+          "band": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "elite",
+                  "high",
+                  "medium",
+                  "low"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Band"
+          }
+        },
+        "type": "object",
+        "required": [
+          "rate",
+          "remediation_deployments",
+          "total_deployments",
+          "band"
+        ],
+        "title": "ReworkRate"
+      },
+      "ServiceCreate": {
+        "properties": {
+          "slug": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{1,62}$",
+            "title": "Slug"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "owner_team": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Owner Team"
+          },
+          "repo_url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2048,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repo Url"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "slug",
+          "name",
+          "owner_team"
+        ],
+        "title": "ServiceCreate"
+      },
+      "ServiceOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "owner_team": {
+            "type": "string",
+            "title": "Owner Team"
+          },
+          "repo_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repo Url"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "slug",
+          "name",
+          "owner_team",
+          "repo_url",
+          "version",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "ServiceOut"
+      },
+      "ServiceUpdate": {
+        "properties": {
+          "slug": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9-]{1,62}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Slug"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "owner_team": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner Team"
+          },
+          "repo_url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2048,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repo Url"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "ServiceUpdate"
+      },
+      "TimeseriesPoint": {
+        "properties": {
+          "start": {
+            "type": "string",
+            "title": "Start"
+          },
+          "deployment_count": {
+            "type": "integer",
+            "title": "Deployment Count"
+          },
+          "median_lead_time_hours": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Median Lead Time Hours"
+          },
+          "change_fail_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Change Fail Rate"
+          },
+          "median_recovery_hours": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Median Recovery Hours"
+          },
+          "rework_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rework Rate"
+          }
+        },
+        "type": "object",
+        "required": [
+          "start",
+          "deployment_count",
+          "median_lead_time_hours",
+          "change_fail_rate",
+          "median_recovery_hours",
+          "rework_rate"
+        ],
+        "title": "TimeseriesPoint"
+      },
+      "VersionResponse": {
+        "properties": {
+          "version": {
+            "type": "string",
+            "title": "Version"
+          },
+          "git_sha": {
+            "type": "string",
+            "title": "Git Sha"
+          },
+          "build_time": {
+            "type": "string",
+            "title": "Build Time"
+          }
+        },
+        "type": "object",
+        "required": [
+          "version",
+          "git_sha",
+          "build_time"
+        ],
+        "title": "VersionResponse"
+      },
+      "Window": {
+        "properties": {
+          "from": {
+            "type": "string",
+            "title": "From"
+          },
+          "to": {
+            "type": "string",
+            "title": "To"
+          },
+          "days": {
+            "type": "number",
+            "title": "Days"
+          }
+        },
+        "type": "object",
+        "required": [
+          "from",
+          "to",
+          "days"
+        ],
+        "title": "Window"
+      }
+    },
+    "securitySchemes": {
+      "IngestApiKey": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-API-Key"
+      }
+    }
+  }
+}

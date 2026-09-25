@@ -1,0 +1,9 @@
+{
+  "name": "dora-openapi-codegen",
+  "private": true,
+  "description": "Isolated OpenAPI -> TypeScript codegen. openapi-typescript 7 requires TypeScript 5, while the app uses TypeScript 6.",
+  "devDependencies": {
+    "openapi-typescript": "7.13.0",
+    "typescript": "5.9.3"
+  }
+}

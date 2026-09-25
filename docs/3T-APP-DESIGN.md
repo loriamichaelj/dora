@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Author** | M.L. |
-| **Status** | In build v0.12 (BOOO M7 complete) |
+| **Status** | In build v0.13 (BOOO M8 complete) |
 | **Date** | 2026-09-25 |
 | **Scope** | Phase A — full stack running end-to-end and tested on localhost via Docker Compose |
 | **Out of scope** | Phase B (AWS, IaC, GitHub Actions CI/CD, container orchestration, SSO) |
@@ -24,6 +24,7 @@
 | v0.10 | M5 decisions (D43–D48): time-series bucket assignment per metric; bands judge unrounded values and rounding is half-up; zero deployments give `per_day: null`; unknown `service_id` is 422; fractional window `days`; service filter as a constant SQL fragment. Golden datasets A, B, C pass exactly, and the weekly expectations for A are extended to every field. |
 | v0.11 | M6 decisions (D49–D54): readiness probe is waited on, never cancelled; asyncpg connect and command timeouts; DB-unreachable errors are 503; unhandled errors become a problem+json 500 in middleware; route labels rebuilt from the route pattern; inbound request IDs validated. `/readyz` body shape and log field rules documented in §7.2 and §13. |
 | v0.12 | M7 decisions (D55–D58): deterministic, repeatable seeding via COPY; lead-time query restructured to meet the performance target (852 → 272 ms p95); error diffusion in the seed and scenario 9 read over the seed window; host scripts target Python 3.10+. |
+| v0.13 | M8 decisions (D59–D62): isolated codegen for the TypeScript 5 peer; the typed client and `ApiError`; URL-held dashboard filters; UTC bucket labels and fixed-unit axes. The dashboard renders the seeded bands and scenario 7's error state in a real browser. |
 
 ---
 
@@ -145,7 +146,7 @@ Pin exact versions in lockfiles at implementation time. Use the latest stable re
 | Routing | React Router | |
 | Forms | React Hook Form + Zod | |
 | Charts | Recharts | |
-| API types | `openapi-typescript`, generated from the FastAPI schema | generated contract; CI can check it for drift |
+| API types | `openapi-typescript`, generated from the FastAPI schema; `openapi-fetch` client | generated contract; `make openapi-check` fails on drift. Codegen runs from its own package, `web/tools/openapi`, because `openapi-typescript` 7 requires TypeScript 5 while the app uses 6 (D59) |
 | Styling | CSS Modules | |
 | Frontend tests | Vitest + Testing Library; Playwright for E2E | |
 | Node (build only) | Node 24 LTS | |
@@ -468,7 +469,10 @@ Query parameters: `service_id` (optional; omit for org-wide), `environment` (def
 | `/failures` | Failures list | Open/resolved filter; "Resolve" sets `resolved_at = now` (editable) |
 
 **Cross-cutting requirements:**
-- One typed API client built on the generated OpenAPI types. There are no hand-written response types.
+- One typed API client built on the generated OpenAPI types. There are no hand-written response types. Every failure becomes an `ApiError` carrying the problem body and `X-Request-ID`; network failures are status 0 (D60).
+- Dashboard filters live in the URL (`?service=&env=&window=7|30|90|custom&from=&to=`), so views can be bookmarked; defaults are omitted. Presets end at the current minute; custom ranges are local dates with an inclusive end date (D61).
+- Time-series bucket labels show the bucket's **UTC** calendar date, because buckets are UTC-defined; every other timestamp renders in local time. Chart axes use one fixed unit (hours, percent) while values and tooltips adapt (D62).
+- Each chart has a visually hidden data table with the same numbers. An empty window shows an empty state rather than cards full of zeros. Queries retry a 5xx up to twice, never a 4xx.
 - Mutations send `If-Match: "<version>"`, using the `version` from the response body. On `412`, show "This record was changed by someone else" and refetch.
 - Render problem+json errors: field errors appear inline, and anything else appears in a toast showing the `X-Request-ID`.
 - Loading, empty, and error states exist for every data view.
@@ -637,7 +641,9 @@ dora/
     ├── package-lock.json
     ├── vite.config.ts
     ├── playwright.config.ts
-    ├── src/{api/, components/, pages/, main.tsx}
+    ├── src/api/{openapi.json, schema.d.ts, client.ts, queries.ts}  # json and d.ts are generated
+    ├── src/{components/, pages/, lib/, styles/, test/, routes.tsx, main.tsx}
+    ├── tools/openapi/           # isolated openapi-typescript codegen (D59)
     └── e2e/
 ```
 
@@ -897,6 +903,10 @@ If both pass, it posts `succeeded` with `finished_at = now`. If either fails, it
 | D56 | Lead time joins `commits` before grouping and filters the window in `HAVING`, with no candidate-commit pre-pass; both percentiles share one sort; metrics transactions use `SET LOCAL work_mem = '16MB'` | Measured against 100k deployments: the planner guessed ~750 rows out of the `HAVING` filter and ran ~150k index probes into `commits`; joining first lets it hash. Sorts spilled to disk at 4MB, and 16MB is where gains stopped. Summary p95 went from 852 ms to 272 ms | A denormalized first-live table (write-path complexity); a session-wide or server-wide `work_mem` increase (memory risk on small RDS instances) |
 | D57 | The seed realizes profile rates by error diffusion, and E2E scenario 9 reads bands over the seed's 90-day window | Independent coin flips gave `legacy-billing` zero failures in three deploys under seed 42. A monthly service has ~1 deploy per 30-day window, so its fail rate there can only be 0 or 1; over 90 days, diffusion guarantees ≥ 1/3, always the **low** band (tested across 20 seeds) | Picking a lucky seed; raising legacy's deploy frequency (contradicts its profile) |
 | D58 | Host-side scripts (`scripts/*.py`) use only the standard library and stay compatible with Python 3.10 | They run on the host's `python3` without a virtualenv; this machine's is 3.10, which lacks `datetime.UTC`. The same constraint applies to `record_deploy.py` (§15.2) | Requiring 3.11+ or `uv run` for host scripts |
+| D59 | `openapi-typescript` runs from its own package (`web/tools/openapi`, pinned with TypeScript 5.9 and a lockfile); `openapi.json` and `schema.d.ts` are committed; `make openapi-check` compares the regenerated files with the index and flags untracked ones | Its only release line declares a TypeScript 5 peer, and the app uses TypeScript 6; npm `overrides` can't satisfy a peer. Isolation keeps both reproducible. Comparing with the index equals comparing with HEAD on a fresh CI checkout, without failing on staged work locally. A deliberate API change was used to prove the check fails | Downgrading the app to TypeScript 5; `--legacy-peer-deps`; running the generator unpinned via `npx` |
+| D60 | The client wraps `openapi-fetch`; `unwrap()` returns data plus ETag or throws `ApiError` (status, problem, request ID, `fieldErrors`, `isEditConflict`); `fetch` is looked up per call | One place turns every failure into something the UI can show, including non-JSON 502s and network errors. `openapi-fetch` captures `globalThis.fetch` at creation by default, which silently bypassed test stubs | Hand-written fetch wrappers; per-page error parsing |
+| D61 | Dashboard filters are URL query parameters; presets end at the current minute | Shareable, bookmarkable views; minute rounding keeps query keys stable, so re-renders don't refetch | Component state; `localStorage` |
+| D62 | Bucket labels render the UTC date; axes use fixed units; the web test suite runs with `TZ=America/Los_Angeles` | A UTC Monday bucket rendered in local time showed as Sunday west of UTC (seen in the first screenshot). Mixed axis units ("3.3 days" beside "40.0 h") misread. Pinning a western zone keeps the regression test meaningful on UTC CI machines; it was mutation-checked | Local-time labels everywhere; adaptive axis units |
 
 ---
 
@@ -914,7 +924,7 @@ The build order of operations, referred to as **BOOO**. Work milestone by milest
 | M5 | DORA engine (queries, bands, summary + timeseries) | **golden datasets A, B, C pass exactly** | ✅ done |
 | M6 | `/readyz`, `/metrics`, structured logging, request/trace IDs, UTC session, SSL config | E2E scenario 7 works manually || ✅ done |
 | M7 | Seed generator (normal + `--large`) | `make seed` produces the §10 profiles; perf check recorded || ✅ done |
-| M8 | Frontend: API client + types, layout, Dashboard | dashboard renders seeded bands correctly | |
+| M8 | Frontend: API client + types, layout, Dashboard | dashboard renders seeded bands correctly || ✅ done |
 | M9 | Frontend: Services, Deployments, Failures pages; conflict handling | Vitest green | |
 | M10 | Playwright E2E in the isolated project, `compose.dev.yaml`, multi-arch build check, `make ci`, README | E2E green without touching dev data | |
 | M11 | **Self-tracking:** `scripts/record_deploy.py` + tests, `GIT_SHA` build-arg plumbing, `make up` auto-record, `make record-deploy` | §15 behaviors verified; **from this commit on, the tracker records its own builds**; §16 checklist complete | |
