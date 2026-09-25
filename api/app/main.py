@@ -8,7 +8,7 @@ from fastapi import APIRouter, FastAPI
 from app.config import DatabaseSettings, Settings, get_database_settings, get_settings
 from app.db import create_engine, create_sessionmaker
 from app.problems import install_problem_handlers
-from app.routers import failures, health, services
+from app.routers import deployments, failures, health, services
 
 API_PREFIX = "/api/v1"
 
@@ -43,6 +43,7 @@ def create_app(
 
     api = APIRouter(prefix=API_PREFIX)
     api.include_router(services.router)
+    api.include_router(deployments.router)
     api.include_router(failures.router)
 
     app.include_router(health.router)

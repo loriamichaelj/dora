@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Author** | M.L. |
-| **Status** | In build v0.6 (BOOO M2 complete) |
+| **Status** | In build v0.7 (BOOO M3 complete) |
 | **Date** | 2026-09-25 |
 | **Scope** | Phase A — full stack running end-to-end and tested on localhost via Docker Compose |
 | **Out of scope** | Phase B (AWS, IaC, GitHub Actions CI/CD, container orchestration, SSO) |
@@ -18,6 +18,7 @@
 | v0.4 | §18 renamed **Build Order of Operations (BOOO)** with a status column. Recorded M0 implementation decisions (D17–D20). Node 24 pinned via `.nvmrc`. Local `FORWARDED_ALLOW_IPS=*` behind nginx. Repo layout matches the actual repo (`dora/`, doc under `docs/`). Fixed §16 reference to the self-tracking milestone (M11, not M10). |
 | v0.5 | M1 decisions (D21–D25): bootstrap grants run as `dora_owner` and give a non-superuser caller `SET`-only membership (found by the RDS-style bootstrap test); Alembic connects with `search_path=pg_catalog`; all constraints explicitly named; `db` healthcheck over TCP; PostgreSQL 18 volume path; separate `DatabaseSettings` for one-shot processes. |
 | v0.6 | M2 decisions (D26–D31): problem `type` URIs and the `errors[]` item shape; `If-Match` accepts `*` and lists; row locks make the version check atomic; failure `deployment_id` is patchable and revalidated; failure responses carry `service_id`; services commit explicitly. Default sorts and extra length limits documented in §7.3 and §7.5. |
+| v0.7 | M3 decisions (D32–D37): `in_progress` must not carry `finished_at`; SHAs normalized to lowercase; commit upsert keeps the whole first-written row; `PATCH /deployments` accepts additive `commits[]`; `finished_at` can't move past a linked failure; list/detail shapes and sort order. |
 
 ---
 
@@ -327,10 +328,10 @@ Log these four endpoints at DEBUG only.
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/deployments` | filters: `service_id`, `environment`, `status`, `kind`, `from`, `to` (on `started_at`); sort `started_at` (default `-started_at`), `finished_at` |
-| POST | `/deployments` | body may include `commits[]`, upserted by `(service_id, sha)` |
-| GET | `/deployments/{id}` | includes `commits[]` and `failures[]` summaries |
-| PATCH | `/deployments/{id}` | status changes follow §7.7; immutable fields per §6.3 |
+| GET | `/deployments` | filters: `service_id`, `environment`, `status`, `kind`, `from` (inclusive), `to` (exclusive), both on `started_at` and offset-aware; sort `started_at` (default `-started_at`), `finished_at` (unfinished deployments sort last in both directions). List items are summaries without `commits`/`failures` (D37). |
+| POST | `/deployments` | body may include `commits[]` (max 500), upserted by `(service_id, sha)`. Unknown `service_id` → 422; duplicate `external_id` for the service → 409. |
+| GET | `/deployments/{id}` | includes `commits[]` (newest `committed_at` first) and `failures[]` summaries (by `detected_at`) |
+| PATCH | `/deployments/{id}` | status changes follow §7.7; immutable fields per §6.3. `commits[]` is additive: new commits are upserted and linked, existing links are never removed, and a new link bumps `version` (D35). |
 | DELETE | `/deployments/{id}` | 409 if it has failures |
 
 Create request example:
@@ -838,6 +839,12 @@ If both pass, it posts `succeeded` with `finished_at = now`. If either fails, it
 | D29 | A failure's `deployment_id` can be changed by `PATCH` and is revalidated | §6.3 doesn't list it as immutable, and re-attributing a failure to the right deployment is a real correction workflow | Making it immutable |
 | D30 | Failure responses include `service_id` (from the linked deployment) | The failures list filters and displays by service; avoids an extra request per row in the UI | Returning only `deployment_id` |
 | D31 | Text inputs are trimmed; `repo_url` ≤ 2048 and `external_ref` ≤ 200 characters | Whitespace-only names would pass the DB's length checks; unbounded free text invites abuse | No API-side limits beyond the DDL |
+| D32 | An `in_progress` deployment must not have `finished_at` (422), in addition to terminal statuses requiring it | Keeps "finished" meaning one thing; the DDL allows the combination but nothing would ever read it correctly | Allowing it silently |
+| D33 | `head_sha` and commit SHAs are lowercased on input before the `^[0-9a-f]{7,40}$` check | Some tools print upper-case SHAs; rejecting them adds pipeline friction for no benefit | Rejecting upper case with 422 |
+| D34 | Commit upsert keeps the entire first-written row (`committed_at`, `author`, `message`); a later `committed_at` mismatch logs `commit_committed_at_conflict` with both values. Duplicate SHAs within one request collapse to the first | Extends §6.3's first-write-wins to the whole row so a commit never changes under existing lead-time samples | Merging fields; last write wins |
+| D35 | `PATCH /deployments/{id}` accepts additive `commits[]`; newly linked commits count as an effective change and bump `version` | Ingest updates (§7.6) must be able to add commits to an existing deployment through the same service code; the detail representation changes, so the ETag must too | Commits only at create time |
+| D36 | Moving a live deployment's `finished_at` later than a linked failure's `detected_at` is a 409 | Preserves the §6.3 rule that a failure is detected at or after its deployment finished | Re-checking only on failure writes |
+| D37 | Deployment list items omit `commits`/`failures`; detail orders commits newest first and failures by `detected_at`; `finished_at` sorts put unfinished rows last | Keeps list pages small; the detail view reads naturally | Nested arrays in every list item |
 
 ---
 
@@ -850,7 +857,7 @@ The build order of operations, referred to as **BOOO**. Work milestone by milest
 | M0 | Scaffold layout, tooling configs, Makefile skeleton, `.env.example`, `.gitignore`; FastAPI app with `/healthz` and `/version` | `make lint` runs | ✅ done |
 | M1 | `db` + `bootstrap.sql` + Alembic (default privileges, then §6.2 tables) + `migrate` service | `make up` brings db, migrate, and api up healthy from a cold volume; migration round-trip and bootstrap-idempotency tests pass | ✅ done |
 | M2 | Services and Failures CRUD: problem+json, pagination, strong ETag / If-Match | integration tests green | ✅ done |
-| M3 | Deployments CRUD + commit upsert + transitions + immutable fields | transition-matrix unit tests and integration tests green | |
+| M3 | Deployments CRUD + commit upsert + transitions + immutable fields | transition-matrix unit tests and integration tests green | ✅ done |
 | M4 | Ingest endpoint (API key, idempotency, stale-event handling) | replay and out-of-order tests green | |
 | M5 | DORA engine (queries, bands, summary + timeseries) | **golden datasets A, B, C pass exactly** | |
 | M6 | `/readyz`, `/metrics`, structured logging, request/trace IDs, UTC session, SSL config | E2E scenario 7 works manually | |
