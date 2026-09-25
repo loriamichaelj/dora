@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Author** | M.L. |
-| **Status** | Reviewed v0.3 |
+| **Status** | In build v0.4 (BOOO M0 complete) |
 | **Date** | 2026-09-25 |
 | **Scope** | Phase A — full stack running end-to-end and tested on localhost via Docker Compose |
 | **Out of scope** | Phase B (AWS, IaC, GitHub Actions CI/CD, container orchestration, SSO) |
@@ -15,6 +15,7 @@
 | v0.1 | Initial draft |
 | v0.2 | Review pass: aligned metric names with current DORA terminology; **rework rate promoted into Phase A**; tiers reframed as configurable benchmark bands and `overall_tier` removed; fixed the lead-time attribution bug; switched to strong ETags (weak ETags can never satisfy `If-Match`); container healthcheck uses `/healthz`; handled out-of-order ingest events; PostgreSQL 18 with `uuidv7()`; UTC-safe bucketing; added AWS/GitHub Actions portability constraints (§14); updated the golden dataset |
 | v0.3 | Renamed to `3T-APP-DESIGN.md`. Added **self-tracking** (§15): the tracker records its own builds as deployments through its own ingest API, and `make up` records automatically. E2E now runs in an isolated Compose project so it can't wipe self-tracking history. Host ports are configurable. |
+| v0.4 | §18 renamed **Build Order of Operations (BOOO)** with a status column. Recorded M0 implementation decisions (D17–D20). Node 24 pinned via `.nvmrc`. Local `FORWARDED_ALLOW_IPS=*` behind nginx. Repo layout matches the actual repo (`dora/`, doc under `docs/`). Fixed §16 reference to the self-tracking milestone (M11, not M10). |
 
 ---
 
@@ -462,12 +463,12 @@ All configuration comes from environment variables via pydantic-settings. The re
 | `DB_SSL_MODE` | api, migrate, seed | `disable` locally | `disable` \| `require` \| `verify-full`; mapped to asyncpg's `ssl` argument (asyncpg does not read `sslmode` from a SQLAlchemy URL the way libpq does) |
 | `DB_SSL_ROOT_CERT` | api, migrate, seed | empty | path to a CA bundle when using `verify-full` |
 | `DB_POOL_SIZE` / `DB_MAX_OVERFLOW` | api | `10` / `5` | |
-| `INGEST_API_KEY` | api | 32+ random chars | the app refuses to start if it's unset or shorter than 32 chars |
+| `INGEST_API_KEY` | api | 32+ random chars | the app refuses to start if it's unset or shorter than 32 chars. `.env.example` ships a valid dev-only key so `cp .env.example .env && make up` works (D19). |
 | `LOG_LEVEL` | api | `INFO` | |
 | `APP_ENV` | api | `local` | |
 | `ENABLE_API_DOCS` | api | `true` locally | controls `/docs` and `/openapi.json` exposure |
 | `PORT` | api | `8000` | bind address is always `0.0.0.0` |
-| `FORWARDED_ALLOW_IPS` | api | `127.0.0.1` | passed to Uvicorn `--forwarded-allow-ips`, so client IPs are correct behind a proxy or load balancer |
+| `FORWARDED_ALLOW_IPS` | api | `*` locally; the load balancer's range in Phase B | passed to Uvicorn's `forwarded_allow_ips`, so client IPs are correct behind a proxy or load balancer. Locally nginx reaches the api from a Compose network address, and the api's host port is bound to `127.0.0.1` only. The app's own default is `127.0.0.1`. |
 | `APP_VERSION` / `GIT_SHA` / `BUILD_TIME` | api (build args → env) | `0.1.0` / full 40-char SHA / ISO time | served by `/version` and written as OCI image labels. The Makefile passes them from `git` into `docker compose build` via `build.args` interpolation. Default to `unknown` when unset, so a plain `docker compose up` still works. |
 | `WEB_PORT` / `API_PORT` / `DB_PORT_HOST` | compose (host side only) | `8080` / `8000` / `5432` | host port mappings, so the isolated E2E project (§15.5) can run beside the dev stack |
 | `DORA_API_URL` | `scripts/record_deploy.py` | `http://localhost:8080` | where the self-tracking script posts |
@@ -553,10 +554,11 @@ Document the minimum Docker Engine and Compose versions in the README.
 ## 11. Repository layout
 
 ```
-dora-tracker/
-├── 3T-APP-DESIGN.md
+dora/
+├── docs/3T-APP-DESIGN.md
 ├── README.md
 ├── Makefile
+├── .nvmrc                     # Node 24 (D18)
 ├── compose.yaml
 ├── compose.dev.yaml
 ├── .env.example
@@ -575,6 +577,7 @@ dora-tracker/
 │   ├── alembic.ini
 │   ├── alembic/{env.py, versions/}
 │   ├── app/
+│   │   ├── __main__.py        # container entrypoint: `python -m app` (D17)
 │   │   ├── main.py            # app factory, middleware, routers, exception handlers
 │   │   ├── config.py
 │   │   ├── db.py              # engine (UTC, SSL, pre_ping), session dependency
@@ -788,7 +791,7 @@ If both pass, it posts `succeeded` with `finished_at = now`. If either fails, it
 - [ ] Images build for both `linux/amd64` and `linux/arm64` (`docker buildx build --platform linux/amd64,linux/arm64`).
 - [ ] No secrets in git or image layers.
 - [ ] `db/bootstrap.sql` is idempotent (run twice → no errors, no changes).
-- [ ] **Self-tracking:** after M10, every `make up` from a clean tree adds a `dora-tracker` deployment in `development` whose `head_sha` matches `/version`. `make e2e` leaves that history untouched.
+- [ ] **Self-tracking:** after M11, every `make up` from a clean tree adds a `dora-tracker` deployment in `development` whose `head_sha` matches `/version`. `make e2e` leaves that history untouched.
 - [ ] The README covers quick start, minimum Docker/Compose versions, architecture summary, Makefile targets, metric definitions (linking to §3), the benchmark disclaimer, and the performance result.
 
 ---
@@ -813,27 +816,31 @@ If both pass, it posts `succeeded` with `finished_at = now`. If either fails, it
 | D14 | Self-tracking through the public ingest API with a stdlib-only host script, shared by `make up` and Phase B CI | One code path; continuously dogfoods ingest; no runner dependencies | An internal DB write; a containerized recorder (no git access) |
 | D15 | Self-tracking refuses dirty trees and verifies `/version` against HEAD | A deployment record must be reproducible from its SHA | Recording whatever is running |
 | D16 | E2E runs in an isolated Compose project | E2E resets data, and self-tracking history must survive it | Sharing the dev stack |
+| D17 | The api container runs `python -m app`, which calls `uvicorn.run()` with `PORT`, `FORWARDED_ALLOW_IPS`, and `timeout_graceful_shutdown=20` from settings | Keeps an exec-form `CMD` (Python is PID 1 and receives `SIGTERM`) while reading runtime values from env vars; exec form can't expand variables | A shell-form `CMD` (breaks signal delivery); hardcoding the port |
+| D18 | Node 24 is pinned in `.nvmrc`, and Makefile web targets fail fast unless `node` is 24 | Host tooling (Vitest, eslint, Playwright) must match the Node 24 build image; mirrors `actions/setup-node` with `node-version-file` in Phase B | Running web tooling in containers (Playwright E2E needs host `docker` and `git` for scenarios 7 and 10) |
+| D19 | `.env.example` contains a valid, clearly dev-only 32+ char `INGEST_API_KEY` | The documented cold start (`cp .env.example .env && make up`) must work with no other steps, and the app refuses short keys | A `change-me` placeholder (the app would refuse to start) |
+| D20 | The full stack (api + web + compose) is runnable from M0; `db` and `migrate` join in M1 | Honors the working agreement that `make up` works at the end of every milestone; proves the nginx proxy rules early | Adding compose and web only at M1 and M8 |
 
 ---
 
-## 18. Implementation plan (for Claude Code)
+## 18. Build Order of Operations (BOOO)
 
-Work milestone by milestone. Each milestone ends with its checks passing and one commit.
+The build order of operations, referred to as **BOOO**. Work milestone by milestone. Each milestone ends with its checks passing and one commit on `dev`, then pauses for review before the next one starts.
 
-| # | Milestone | Done when |
-|---|---|---|
-| M0 | Scaffold layout, tooling configs, Makefile skeleton, `.env.example`, `.gitignore`; FastAPI app with `/healthz` and `/version` | `make lint` runs |
-| M1 | `db` + `bootstrap.sql` + Alembic (default privileges, then §6.2 tables) + `migrate` service | `make up` brings db, migrate, and api up healthy from a cold volume; migration round-trip and bootstrap-idempotency tests pass |
-| M2 | Services and Failures CRUD: problem+json, pagination, strong ETag / If-Match | integration tests green |
-| M3 | Deployments CRUD + commit upsert + transitions + immutable fields | transition-matrix unit tests and integration tests green |
-| M4 | Ingest endpoint (API key, idempotency, stale-event handling) | replay and out-of-order tests green |
-| M5 | DORA engine (queries, bands, summary + timeseries) | **golden datasets A, B, C pass exactly** |
-| M6 | `/readyz`, `/metrics`, structured logging, request/trace IDs, UTC session, SSL config | E2E scenario 7 works manually |
-| M7 | Seed generator (normal + `--large`) | `make seed` produces the §10 profiles; perf check recorded |
-| M8 | Frontend: API client + types, layout, Dashboard | dashboard renders seeded bands correctly |
-| M9 | Frontend: Services, Deployments, Failures pages; conflict handling | Vitest green |
-| M10 | Playwright E2E in the isolated project, `compose.dev.yaml`, multi-arch build check, `make ci`, README | E2E green without touching dev data |
-| M11 | **Self-tracking:** `scripts/record_deploy.py` + tests, `GIT_SHA` build-arg plumbing, `make up` auto-record, `make record-deploy` | §15 behaviors verified; **from this commit on, the tracker records its own builds**; §16 checklist complete |
+| # | Milestone | Done when | Status |
+|---|---|---|---|
+| M0 | Scaffold layout, tooling configs, Makefile skeleton, `.env.example`, `.gitignore`; FastAPI app with `/healthz` and `/version` | `make lint` runs | ✅ done |
+| M1 | `db` + `bootstrap.sql` + Alembic (default privileges, then §6.2 tables) + `migrate` service | `make up` brings db, migrate, and api up healthy from a cold volume; migration round-trip and bootstrap-idempotency tests pass | |
+| M2 | Services and Failures CRUD: problem+json, pagination, strong ETag / If-Match | integration tests green | |
+| M3 | Deployments CRUD + commit upsert + transitions + immutable fields | transition-matrix unit tests and integration tests green | |
+| M4 | Ingest endpoint (API key, idempotency, stale-event handling) | replay and out-of-order tests green | |
+| M5 | DORA engine (queries, bands, summary + timeseries) | **golden datasets A, B, C pass exactly** | |
+| M6 | `/readyz`, `/metrics`, structured logging, request/trace IDs, UTC session, SSL config | E2E scenario 7 works manually | |
+| M7 | Seed generator (normal + `--large`) | `make seed` produces the §10 profiles; perf check recorded | |
+| M8 | Frontend: API client + types, layout, Dashboard | dashboard renders seeded bands correctly | |
+| M9 | Frontend: Services, Deployments, Failures pages; conflict handling | Vitest green | |
+| M10 | Playwright E2E in the isolated project, `compose.dev.yaml`, multi-arch build check, `make ci`, README | E2E green without touching dev data | |
+| M11 | **Self-tracking:** `scripts/record_deploy.py` + tests, `GIT_SHA` build-arg plumbing, `make up` auto-record, `make record-deploy` | §15 behaviors verified; **from this commit on, the tracker records its own builds**; §16 checklist complete | |
 
 **Working agreements for the implementer:**
 - Don't change API contracts, metric definitions, or golden expectations without updating this document and §17.
