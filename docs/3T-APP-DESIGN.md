@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Author** | M.L. |
-| **Status** | In build v0.9 (BOOO M4 complete) |
+| **Status** | In build v0.10 (BOOO M5 complete) |
 | **Date** | 2026-09-25 |
 | **Scope** | Phase A — full stack running end-to-end and tested on localhost via Docker Compose |
 | **Out of scope** | Phase B (AWS, IaC, GitHub Actions CI/CD, container orchestration, SSO) |
@@ -21,6 +21,7 @@
 | v0.7 | M3 decisions (D32–D37): `in_progress` must not carry `finished_at`; SHAs normalized to lowercase; commit upsert keeps the whole first-written row; `PATCH /deployments` accepts additive `commits[]`; `finished_at` can't move past a linked failure; list/detail shapes and sort order. |
 | v0.8 | Commits are classified as **deployment commits** (shipped by ≥1 deployment) or **non-deployment commits** (D38). Deleting a service is blocked only by deployments; its non-deployment commits are deleted with it. |
 | v0.9 | M4 decisions (D39–D42): 401 challenge header and auth-before-body; ingest response shape; partial updates from events; concurrent first deliveries collapse to one row. Coverage now traces greenlets, so reported coverage reflects code run through SQLAlchemy's async layer. |
+| v0.10 | M5 decisions (D43–D48): time-series bucket assignment per metric; bands judge unrounded values and rounding is half-up; zero deployments give `per_day: null`; unknown `service_id` is 422; fractional window `days`; service filter as a constant SQL fragment. Golden datasets A, B, C pass exactly, and the weekly expectations for A are extended to every field. |
 
 ---
 
@@ -434,13 +435,21 @@ Query parameters: `service_id` (optional; omit for org-wide), `environment` (def
 }
 ```
 
-`GET /api/v1/metrics/dora/timeseries` takes the same filters plus `bucket=day|week|month` (default `week`). It returns `{ "bucket": "week", "points": [ { "start": "...", "deployment_count": n, "median_lead_time_hours": x|null, "change_fail_rate": x|null, "median_recovery_hours": x|null, "rework_rate": x|null } ] }`. Empty buckets are included, with count `0` and the other fields `null`.
+`GET /api/v1/metrics/dora/timeseries` takes the same filters plus `bucket=day|week|month` (default `week`). It returns `{ "window": {...}, "filters": {...}, "bucket": "week", "points": [ { "start": "...", "deployment_count": n, "median_lead_time_hours": x|null, "change_fail_rate": x|null, "median_recovery_hours": x|null, "rework_rate": x|null } ] }`. Empty buckets are included, with count `0` and the other fields `null`.
+
+**Bucket assignment (D43):** a deployment's count, fail and rework facts go in the bucket of its `finished_at`. A lead-time sample goes in the bucket of the commit's first live deployment. A recovery sample goes in the bucket of the failed deployment's `finished_at`, not its `resolved_at`, so a bucket's recovery figure describes the failures its own deployments caused.
+
+**Window (D47):** `from` and `to` are offset-aware and normalized to UTC. `from` must be before `to`. Omitting both gives the 30 days ending now; giving only `to` gives the 30 days ending then. `days` is the window's exact length in days and may be fractional; `per_day` divides by it. An unknown `service_id` is 422 (D46).
 
 **Implementation requirements:**
 - Compute aggregations in SQL: `percentile_cont(0.5 / 0.9) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM interval) / 3600)`. Do not load rows into Python.
 - Lead time uses a CTE that finds `min(finished_at)` per commit across **all** live deployments in the environment, then filters to the window (§3).
 - **UTC safety:** `date_trunc` on `timestamptz` depends on the session timezone. Set the connection's `timezone=UTC` through asyncpg `server_settings` **and** use the explicit form `date_trunc('week', ts, 'UTC')`. The same applies to `deploy_days`.
 - Band classification happens in Python from the aggregates (a pure function). Round hours to 2 decimals and rates to 4.
+  - Bands judge the **unrounded** value, so a displayed `0.1429` is still compared with 1/7 exactly. Rounding is half-up, not Python's banker's rounding (D44).
+  - With zero counted deployments, `per_day` is `null` and its band is `null`, as golden dataset B requires; `count` and `deploy_days` are `0` (D45).
+- Lead time computes `first_live` only for commits shipped by a counted deployment (a candidate set), then takes their minimum live `finished_at` across all time. This gives the same result as scanning every commit and keeps the query proportional to the window.
+- The optional service filter is appended as a constant SQL fragment rather than written as `(:id IS NULL OR ...)`, which would defeat index use under prepared-statement generic plans. Every value is a bound parameter (D48).
 
 ---
 
@@ -858,6 +867,12 @@ If both pass, it posts `succeeded` with `finished_at = now`. If either fails, it
 | D40 | Ingest returns the deployment detail plus `ignored` (`null` or `"stale_event"`) | One shape for all outcomes keeps the pipeline client trivial; `201`/`200` and the ETag tell it what happened | A separate envelope for stale events |
 | D41 | Ingest updates apply only the fields present in the event | A terminal event from a different step may omit fields such as `deployed_by`; defaults like `kind: planned` must not overwrite a `remediation` set by the first event | Full replacement with defaults |
 | D42 | Concurrent first deliveries collapse to one row: savepoint insert, and on a `uq_service_external` violation or a visible duplicate, retry as an update | Webhook and CI retries can arrive simultaneously; proven by a 5-way concurrent test (one 201, four 200) | A 409 for the loser; table-level locking |
+| D43 | Time-series facts are bucketed by deployment `finished_at`, lead-time samples by first-live `finished_at`, and recovery samples by the failed deployment's `finished_at` | Keeps each bucket internally consistent with the summary's definitions; a failure resolved weeks later still describes the deployment that caused it | Bucketing recovery by `resolved_at` or `detected_at` |
+| D44 | Bands judge unrounded values; displayed values round half-up | Rounding before classifying can move a value across a threshold; banker's rounding surprises readers (0.125 → 0.12) | Classifying the rounded figure; Python's `round` |
+| D45 | `per_day` and its band are `null` when no deployments are counted | Golden dataset B requires every value to be null in an empty window; the count (`0`) still says what happened | `per_day: 0` with band `low` |
+| D46 | An unknown `service_id` filter on the metrics endpoints is 422 | Surfaces typos and stale links instead of silently showing an empty dashboard | Returning empty metrics |
+| D47 | The window's `days` is its exact, possibly fractional, length; bounds are normalized to UTC | Custom windows needn't be whole days, and `per_day` must match the window actually queried | Rounding the window to whole days |
+| D48 | The service filter is a constant SQL fragment added only when filtering; Ruff's S608 is suppressed for `app/dora/queries.py` alone | `(:id IS NULL OR ...)` defeats index use under generic plans, which matters for the §12 performance target; only module constants are interpolated | One query with a nullable-parameter predicate |
 
 ---
 
@@ -872,7 +887,7 @@ The build order of operations, referred to as **BOOO**. Work milestone by milest
 | M2 | Services and Failures CRUD: problem+json, pagination, strong ETag / If-Match | integration tests green | ✅ done |
 | M3 | Deployments CRUD + commit upsert + transitions + immutable fields | transition-matrix unit tests and integration tests green | ✅ done |
 | M4 | Ingest endpoint (API key, idempotency, stale-event handling) | replay and out-of-order tests green | ✅ done |
-| M5 | DORA engine (queries, bands, summary + timeseries) | **golden datasets A, B, C pass exactly** | |
+| M5 | DORA engine (queries, bands, summary + timeseries) | **golden datasets A, B, C pass exactly** | ✅ done |
 | M6 | `/readyz`, `/metrics`, structured logging, request/trace IDs, UTC session, SSL config | E2E scenario 7 works manually | |
 | M7 | Seed generator (normal + `--large`) | `make seed` produces the §10 profiles; perf check recorded | |
 | M8 | Frontend: API client + types, layout, Dashboard | dashboard renders seeded bands correctly | |

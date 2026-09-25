@@ -39,6 +39,9 @@ ignore = ["S101"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S105", "S106"]
+# SQL is assembled only from module constants (the live-status list and a
+# fixed service filter); every value is a bound parameter. See the module doc.
+"app/dora/queries.py" = ["S608"]
 
 [tool.mypy]
 python_version = "3.13"
