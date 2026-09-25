@@ -1,0 +1,64 @@
+# Rendered at container start by the image's envsubst support.
+# ${API_UPSTREAM} is host:port of the API (e.g. api:8000); never hardcoded.
+
+upstream dora_api {
+    server ${API_UPSTREAM};
+    keepalive 16;
+}
+
+server {
+    listen 8080;
+    server_name _;
+    root /usr/share/nginx/html;
+    server_tokens off;
+
+    # gzip for static assets only. It stays off for proxied API responses,
+    # because nginx's gzip module downgrades strong ETags to weak ones, and
+    # a weak ETag never satisfies If-Match (§7.1, D6).
+    gzip off;
+
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Request-ID $http_x_request_id;
+
+    location /api/ {
+        proxy_pass http://dora_api;
+    }
+
+    # Operational endpoints. /metrics is deliberately NOT proxied: it falls
+    # through to the SPA below and never exposes Prometheus output.
+    location = /healthz {
+        proxy_pass http://dora_api;
+    }
+
+    location = /readyz {
+        proxy_pass http://dora_api;
+    }
+
+    location = /version {
+        proxy_pass http://dora_api;
+    }
+
+    # Vite emits content-hashed file names here, so they can be cached forever.
+    location /assets/ {
+        gzip on;
+        gzip_vary on;
+        gzip_types text/css application/javascript application/json image/svg+xml;
+        add_header Cache-Control "public, max-age=31536000, immutable";
+        try_files $uri =404;
+    }
+
+    location = /index.html {
+        add_header Cache-Control "no-cache";
+    }
+
+    # SPA fallback: client-side routes are served index.html.
+    location / {
+        add_header Cache-Control "no-cache";
+        try_files $uri /index.html;
+    }
+}

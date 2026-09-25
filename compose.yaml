@@ -1,0 +1,40 @@
+# Production-like local stack (§10). Startup order:
+#   db healthy -> migrate exited 0 -> api healthy -> web
+# Values come from .env (see .env.example); build info comes from the Makefile.
+
+x-build-args: &build-args
+  APP_VERSION: ${APP_VERSION:-unknown}
+  GIT_SHA: ${GIT_SHA:-unknown}
+  BUILD_TIME: ${BUILD_TIME:-unknown}
+
+services:
+  api:
+    build:
+      context: ./api
+      args: *build-args
+    image: dora-api:local
+    environment:
+      APP_ENV: ${APP_ENV:-local}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      ENABLE_API_DOCS: ${ENABLE_API_DOCS:-false}
+      PORT: ${PORT:-8000}
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-127.0.0.1}
+      INGEST_API_KEY: ${INGEST_API_KEY:?set INGEST_API_KEY in .env (see .env.example)}
+    ports:
+      - "127.0.0.1:${API_PORT:-8000}:8000"
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+  web:
+    build:
+      context: ./web
+      args: *build-args
+    image: dora-web:local
+    environment:
+      API_UPSTREAM: api:8000
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${WEB_PORT:-8080}:8080"
+    restart: unless-stopped
