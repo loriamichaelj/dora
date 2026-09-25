@@ -4,18 +4,24 @@ One container per test session. It is bootstrapped with db/bootstrap.sql
 exactly as the local stack and RDS are, then migrated to head as dora_owner.
 """
 
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 from alembic.config import Config
+from fastapi import FastAPI
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import text
 from sqlalchemy.engine import Connection
+from sqlalchemy.ext.asyncio import AsyncEngine
 from testcontainers.community.postgres import PostgresContainer
 
 from alembic import command
 from app.config import DatabaseSettings
-from app.db import create_migration_engine
+from app.db import create_engine, create_migration_engine
+from app.main import create_app
 
 API_DIR = Path(__file__).resolve().parents[2]
 REPO_DIR = API_DIR.parent
@@ -118,8 +124,8 @@ async def run_alembic(settings: DatabaseSettings, action: str, revision: str = "
         await engine.dispose()
 
 
-@pytest.fixture(scope="session")
-def database() -> Iterator[Database]:
+@contextmanager
+def bootstrapped_postgres() -> Iterator[Database]:
     container = start_postgres()
     try:
         db = database_for(container)
@@ -130,6 +136,62 @@ def database() -> Iterator[Database]:
 
 
 @pytest.fixture(scope="session")
+def database() -> Iterator[Database]:
+    """The shared test database. Tests may add and delete rows, never change schema."""
+    with bootstrapped_postgres() as db:
+        yield db
+
+
+@pytest.fixture
+def scratch_database() -> Iterator[Database]:
+    """A private, bootstrapped database for tests that change the schema."""
+    with bootstrapped_postgres() as db:
+        yield db
+
+
+@pytest.fixture(scope="session")
 async def migrated(database: Database) -> Database:
     await run_alembic(database.owner, "upgrade")
     return database
+
+
+DATA_TABLES = ", ".join(
+    f"dora.{t}" for t in ("failures", "deployment_commits", "commits", "deployments", "services")
+)
+
+
+@pytest.fixture(scope="session")
+async def owner_engine(migrated: Database) -> AsyncIterator[AsyncEngine]:
+    engine = create_engine(migrated.owner, null_pool=True)
+    yield engine
+    await engine.dispose()
+
+
+@pytest.fixture(scope="session")
+async def app_engine(migrated: Database) -> AsyncIterator[AsyncEngine]:
+    """Runs as dora_app, like the API. For arranging rows the API can't create yet."""
+    engine = create_engine(migrated.app, null_pool=True)
+    yield engine
+    await engine.dispose()
+
+
+@pytest.fixture
+async def clean_tables(owner_engine: AsyncEngine) -> AsyncIterator[None]:
+    yield
+    async with owner_engine.begin() as conn:
+        await conn.execute(text(f"TRUNCATE {DATA_TABLES}"))
+
+
+@pytest.fixture(scope="session")
+async def api_app(migrated: Database) -> AsyncIterator[FastAPI]:
+    app = create_app(db_settings=migrated.app)
+    async with app.router.lifespan_context(app):
+        yield app
+
+
+@pytest.fixture
+async def api(api_app: FastAPI, clean_tables: None) -> AsyncIterator[AsyncClient]:
+    """HTTP client for the API against the shared database; rows are wiped after each test."""
+    transport = ASGITransport(app=api_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        yield client

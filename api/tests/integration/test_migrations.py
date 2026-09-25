@@ -43,16 +43,18 @@ async def table_names(database: Database) -> set[str]:
         await engine.dispose()
 
 
-async def test_upgrade_downgrade_upgrade_round_trip(migrated: Database) -> None:
-    assert await table_names(migrated) == DORA_TABLES
+async def test_upgrade_downgrade_upgrade_round_trip(scratch_database: Database) -> None:
+    db = scratch_database
+    await run_alembic(db.owner, "upgrade", "head")
+    assert await table_names(db) == DORA_TABLES
 
-    await run_alembic(migrated.owner, "downgrade", "base")
-    assert await table_names(migrated) == {"alembic_version"}
-    default_acl = migrated.psql("-At", "-c", "SELECT count(*) FROM pg_default_acl")
+    await run_alembic(db.owner, "downgrade", "base")
+    assert await table_names(db) == {"alembic_version"}
+    default_acl = db.psql("-At", "-c", "SELECT count(*) FROM pg_default_acl")
     assert default_acl.strip() == "0"
 
-    await run_alembic(migrated.owner, "upgrade", "head")
-    assert await table_names(migrated) == DORA_TABLES
+    await run_alembic(db.owner, "upgrade", "head")
+    assert await table_names(db) == DORA_TABLES
 
 
 async def test_models_match_migrations(migrated: Database) -> None:

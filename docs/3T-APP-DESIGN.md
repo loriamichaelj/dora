@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Author** | M.L. |
-| **Status** | In build v0.5 (BOOO M1 complete) |
+| **Status** | In build v0.6 (BOOO M2 complete) |
 | **Date** | 2026-09-25 |
 | **Scope** | Phase A — full stack running end-to-end and tested on localhost via Docker Compose |
 | **Out of scope** | Phase B (AWS, IaC, GitHub Actions CI/CD, container orchestration, SSO) |
@@ -17,6 +17,7 @@
 | v0.3 | Renamed to `3T-APP-DESIGN.md`. Added **self-tracking** (§15): the tracker records its own builds as deployments through its own ingest API, and `make up` records automatically. E2E now runs in an isolated Compose project so it can't wipe self-tracking history. Host ports are configurable. |
 | v0.4 | §18 renamed **Build Order of Operations (BOOO)** with a status column. Recorded M0 implementation decisions (D17–D20). Node 24 pinned via `.nvmrc`. Local `FORWARDED_ALLOW_IPS=*` behind nginx. Repo layout matches the actual repo (`dora/`, doc under `docs/`). Fixed §16 reference to the self-tracking milestone (M11, not M10). |
 | v0.5 | M1 decisions (D21–D25): bootstrap grants run as `dora_owner` and give a non-superuser caller `SET`-only membership (found by the RDS-style bootstrap test); Alembic connects with `search_path=pg_catalog`; all constraints explicitly named; `db` healthcheck over TCP; PostgreSQL 18 volume path; separate `DatabaseSettings` for one-shot processes. |
+| v0.6 | M2 decisions (D26–D31): problem `type` URIs and the `errors[]` item shape; `If-Match` accepts `*` and lists; row locks make the version check atomic; failure `deployment_id` is patchable and revalidated; failure responses carry `service_id`; services commit explicitly. Default sorts and extra length limits documented in §7.3 and §7.5. |
 
 ---
 
@@ -290,11 +291,14 @@ It runs this *before* creating tables, which avoids needing role membership that
 ### 7.1 Conventions
 - Base path: `/api/v1`. JSON only. Timestamps are ISO 8601 with offset; responses are always UTC (`Z`).
 - **Errors:** `application/problem+json` per RFC 9457. The body has `type`, `title`, `status`, `detail`, `instance`, plus `errors[]` for field validation. Override FastAPI's default 422 body.
+  - `type` is `urn:dora:problem:<slug>` for domain problems (`validation`, `not-found`, `conflict`, `precondition-failed`, `precondition-required`, `unauthorized`) and `about:blank` for plain HTTP errors such as an unknown route (D26).
+  - Each `errors[]` item is `{ "location": "body"|"query"|"path"|"header", "field": "<dotted.path>", "message": "...", "type": "..." }`. The UI keys inline field errors on `field`.
 - **Pagination:** `?limit=` (default 50, max 200) and `&offset=`. The envelope is `{ "items": [...], "total": n, "limit": n, "offset": n }`.
 - **Sorting:** `?sort=field` or `?sort=-field` against a per-resource whitelist.
 - **Optimistic concurrency:**
   - Single-resource `GET`, `POST`, and `PATCH` responses include a **strong** `ETag: "<version>"`, and the body also carries `version`.
-  - `PATCH` and `DELETE` require `If-Match: "<version>"`. A missing header returns `428 Precondition Required`; a mismatch returns `412 Precondition Failed`.
+  - `PATCH` and `DELETE` require `If-Match: "<version>"`. A missing header returns `428 Precondition Required`; a mismatch returns `412 Precondition Failed`. Per RFC 9110, `If-Match: *` and comma-separated lists are accepted (D27).
+  - Writes lock the row (`SELECT ... FOR UPDATE`) before comparing versions, so two writers holding the same ETag can't both succeed (D28).
   - ⚠ Do **not** use weak ETags (`W/"..."`). `If-Match` uses strong comparison (RFC 9110), so a weak ETag never matches and every write would fail with 412.
 - **Request ID:** accept an inbound `X-Request-ID`, or else generate a UUIDv4. Echo it in the response and include it in every log line. Also log `X-Amzn-Trace-Id` when present (the AWS load balancer adds it in Phase B).
 
@@ -313,7 +317,7 @@ Log these four endpoints at DEBUG only.
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/services` | filter `?owner_team=`, `?q=` (slug/name contains); sort `name`, `created_at` |
+| GET | `/services` | filter `?owner_team=` (exact), `?q=` (slug/name contains, case-insensitive, `%` and `_` match literally); sort `name` (default), `created_at` |
 | POST | `/services` | 201 + `Location` + `ETag`; 409 on duplicate slug |
 | GET | `/services/{id}` | 404 if missing; `ETag` |
 | PATCH | `/services/{id}` | partial update; `slug` is immutable |
@@ -353,10 +357,10 @@ Create request example:
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/failures` | filters: `service_id`, `deployment_id`, `severity`, `open=true|false` |
-| POST | `/failures` | validates the §6.3 rules |
+| GET | `/failures` | filters: `service_id`, `deployment_id`, `severity`, `open=true|false`; sort `detected_at` (default `-detected_at`), `created_at` |
+| POST | `/failures` | validates the §6.3 rules: unknown `deployment_id` → 422; deployment not live → 409; `detected_at` before the deployment's `finished_at`, or `resolved_at` before `detected_at` → 422. Responses include the deployment's `service_id` (D30). |
 | GET | `/failures/{id}` | |
-| PATCH | `/failures/{id}` | typical use: set `resolved_at` |
+| PATCH | `/failures/{id}` | typical use: set `resolved_at` (send `null` to reopen). `deployment_id` may be changed and is revalidated like a create (D29). |
 | DELETE | `/failures/{id}` | 204 |
 
 ### 7.6 Ingest (machine-facing; called by GitHub Actions in Phase B)
@@ -828,6 +832,12 @@ If both pass, it posts `succeeded` with `finished_at = now`. If either fails, it
 | D23 | The `db` healthcheck runs `pg_isready` over TCP (`-h 127.0.0.1`) | During first-start init the image's temporary server listens only on the Unix socket, so a socket check can pass before init scripts finish | The doc's original socket-based check |
 | D24 | Every constraint and index is explicitly named (model naming convention plus explicit names) | Autogenerate, `alembic check`, and the problem+json constraint mapper (§6.3) all rely on stable names | PostgreSQL's generated names |
 | D25 | `DatabaseSettings` is separate from the API's `Settings` | `migrate` and `seed` need DB credentials but not API-only values such as `INGEST_API_KEY`, which the API requires at startup | One settings class with every value |
+| D26 | Problem `type` is `urn:dora:problem:<slug>`; `errors[]` items carry `location`, `field`, `message`, `type` | Stable, machine-readable types the UI can switch on without a hosted docs site; `field` maps directly to form inputs | `about:blank` everywhere; FastAPI's default `loc` arrays |
+| D27 | `If-Match` accepts `*` and comma-separated lists; weak validators never match | RFC 9110 compliance; strong comparison is what makes the ETag scheme work (D6) | Accepting only a single quoted version |
+| D28 | Every write locks its row with `SELECT ... FOR UPDATE` before the version check, and the service layer commits explicitly | The check-then-write is atomic, proven by a concurrent-writers test (one 200, one 412). Committing in the service layer rather than in a `yield` dependency guarantees a success response is never sent before the commit | `UPDATE ... WHERE version = n` without a lock; commit in dependency teardown |
+| D29 | A failure's `deployment_id` can be changed by `PATCH` and is revalidated | §6.3 doesn't list it as immutable, and re-attributing a failure to the right deployment is a real correction workflow | Making it immutable |
+| D30 | Failure responses include `service_id` (from the linked deployment) | The failures list filters and displays by service; avoids an extra request per row in the UI | Returning only `deployment_id` |
+| D31 | Text inputs are trimmed; `repo_url` ≤ 2048 and `external_ref` ≤ 200 characters | Whitespace-only names would pass the DB's length checks; unbounded free text invites abuse | No API-side limits beyond the DDL |
 
 ---
 
@@ -839,7 +849,7 @@ The build order of operations, referred to as **BOOO**. Work milestone by milest
 |---|---|---|---|
 | M0 | Scaffold layout, tooling configs, Makefile skeleton, `.env.example`, `.gitignore`; FastAPI app with `/healthz` and `/version` | `make lint` runs | ✅ done |
 | M1 | `db` + `bootstrap.sql` + Alembic (default privileges, then §6.2 tables) + `migrate` service | `make up` brings db, migrate, and api up healthy from a cold volume; migration round-trip and bootstrap-idempotency tests pass | ✅ done |
-| M2 | Services and Failures CRUD: problem+json, pagination, strong ETag / If-Match | integration tests green | |
+| M2 | Services and Failures CRUD: problem+json, pagination, strong ETag / If-Match | integration tests green | ✅ done |
 | M3 | Deployments CRUD + commit upsert + transitions + immutable fields | transition-matrix unit tests and integration tests green | |
 | M4 | Ingest endpoint (API key, idempotency, stale-event handling) | replay and out-of-order tests green | |
 | M5 | DORA engine (queries, bands, summary + timeseries) | **golden datasets A, B, C pass exactly** | |
