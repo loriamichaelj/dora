@@ -7,19 +7,77 @@ x-build-args: &build-args
   GIT_SHA: ${GIT_SHA:-unknown}
   BUILD_TIME: ${BUILD_TIME:-unknown}
 
+# migrate and seed run the api image; each declares the same build so Compose
+# never tries to pull dora-api:local from a registry.
+x-api-build: &api-build
+  context: ./api
+  args: *build-args
+
+x-db-connection: &db-connection
+  DB_HOST: ${DB_HOST:-db}
+  DB_PORT: ${DB_PORT:-5432}
+  DB_NAME: ${DB_NAME:-dora}
+  DB_SSL_MODE: ${DB_SSL_MODE:-disable}
+  DB_SSL_ROOT_CERT: ${DB_SSL_ROOT_CERT:-}
+
 services:
+  db:
+    image: postgres:18.6
+    environment:
+      POSTGRES_DB: dora
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
+      DORA_OWNER_PASSWORD: ${DORA_OWNER_PASSWORD:?set DORA_OWNER_PASSWORD in .env}
+      DORA_APP_PASSWORD: ${DORA_APP_PASSWORD:?set DORA_APP_PASSWORD in .env}
+    volumes:
+      # PostgreSQL 18 images keep PGDATA under /var/lib/postgresql/18/docker,
+      # so the volume mounts at the parent directory.
+      - pgdata:/var/lib/postgresql
+      - ./db/bootstrap.sql:/bootstrap.sql:ro
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "127.0.0.1:${DB_PORT_HOST:-5432}:5432"
+    healthcheck:
+      # Over TCP: during first-start init the temporary server listens on the
+      # Unix socket only, so a socket check could pass before init finishes.
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "postgres", "-d", "dora"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 10s
+    restart: unless-stopped
+
+  migrate:
+    build: *api-build
+    image: dora-api:local
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      <<: *db-connection
+      DB_USER: dora_owner
+      DB_PASSWORD: ${DORA_OWNER_PASSWORD:?set DORA_OWNER_PASSWORD in .env}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
   api:
-    build:
-      context: ./api
-      args: *build-args
+    build: *api-build
     image: dora-api:local
     environment:
+      <<: *db-connection
+      DB_USER: dora_app
+      DB_PASSWORD: ${DORA_APP_PASSWORD:?set DORA_APP_PASSWORD in .env}
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-10}
+      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-5}
       APP_ENV: ${APP_ENV:-local}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       ENABLE_API_DOCS: ${ENABLE_API_DOCS:-false}
       PORT: ${PORT:-8000}
       FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-127.0.0.1}
       INGEST_API_KEY: ${INGEST_API_KEY:?set INGEST_API_KEY in .env (see .env.example)}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
     ports:
       - "127.0.0.1:${API_PORT:-8000}:8000"
     restart: unless-stopped
@@ -38,3 +96,6 @@ services:
     ports:
       - "127.0.0.1:${WEB_PORT:-8080}:8080"
     restart: unless-stopped
+
+volumes:
+  pgdata:

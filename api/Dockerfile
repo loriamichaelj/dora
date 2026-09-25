@@ -43,6 +43,8 @@ RUN groupadd --system --gid 10001 app \
 
 WORKDIR /app
 COPY --from=build /app/.venv /app/.venv
+COPY alembic.ini ./
+COPY alembic ./alembic
 COPY app ./app
 
 USER 10001:10001

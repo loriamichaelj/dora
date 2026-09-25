@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Author** | M.L. |
-| **Status** | In build v0.4 (BOOO M0 complete) |
+| **Status** | In build v0.5 (BOOO M1 complete) |
 | **Date** | 2026-09-25 |
 | **Scope** | Phase A — full stack running end-to-end and tested on localhost via Docker Compose |
 | **Out of scope** | Phase B (AWS, IaC, GitHub Actions CI/CD, container orchestration, SSO) |
@@ -16,6 +16,7 @@
 | v0.2 | Review pass: aligned metric names with current DORA terminology; **rework rate promoted into Phase A**; tiers reframed as configurable benchmark bands and `overall_tier` removed; fixed the lead-time attribution bug; switched to strong ETags (weak ETags can never satisfy `If-Match`); container healthcheck uses `/healthz`; handled out-of-order ingest events; PostgreSQL 18 with `uuidv7()`; UTC-safe bucketing; added AWS/GitHub Actions portability constraints (§14); updated the golden dataset |
 | v0.3 | Renamed to `3T-APP-DESIGN.md`. Added **self-tracking** (§15): the tracker records its own builds as deployments through its own ingest API, and `make up` records automatically. E2E now runs in an isolated Compose project so it can't wipe self-tracking history. Host ports are configurable. |
 | v0.4 | §18 renamed **Build Order of Operations (BOOO)** with a status column. Recorded M0 implementation decisions (D17–D20). Node 24 pinned via `.nvmrc`. Local `FORWARDED_ALLOW_IPS=*` behind nginx. Repo layout matches the actual repo (`dora/`, doc under `docs/`). Fixed §16 reference to the self-tracking milestone (M11, not M10). |
+| v0.5 | M1 decisions (D21–D25): bootstrap grants run as `dora_owner` and give a non-superuser caller `SET`-only membership (found by the RDS-style bootstrap test); Alembic connects with `search_path=pg_catalog`; all constraints explicitly named; `db` healthcheck over TCP; PostgreSQL 18 volume path; separate `DatabaseSettings` for one-shot processes. |
 
 ---
 
@@ -173,6 +174,7 @@ Alembic migrations are authoritative, and this DDL is the target they must produ
 
 - Primary keys use **UUIDv7**, via the native `uuidv7()` added in PostgreSQL 18. Its time-ordered values give far better B-tree index locality than random v4 UUIDs.
 - Enumerations use `text` + `CHECK` rather than native `ENUM` types, because native enums are painful to alter under migrations.
+- Every constraint and index has an explicit name (D24). Constraints the DDL below leaves unnamed get `pk_<table>`, `uq_<table>_<column>`, `fk_<table>_<column>`, or `ck_<table>_<column>` names in the migrations.
 
 ```sql
 CREATE TABLE dora.services (
@@ -265,8 +267,9 @@ Role setup is split so the **same SQL works locally and on RDS**, where there is
 
 `db/bootstrap.sql` must be idempotent (`DO $$ ... IF NOT EXISTS ... $$`) and must:
 - create the roles `dora_owner` (login) and `dora_app` (login), taking passwords from psql variables;
+- if the caller is not a superuser (the RDS master user), grant it `dora_owner` membership with `SET TRUE, INHERIT FALSE`, which `CREATE SCHEMA ... AUTHORIZATION` requires (D21);
 - run `CREATE SCHEMA IF NOT EXISTS dora AUTHORIZATION dora_owner;`
-- run `GRANT USAGE ON SCHEMA dora TO dora_app;`
+- run `GRANT USAGE ON SCHEMA dora TO dora_app;` **as `dora_owner`** (`SET ROLE dora_owner; ... RESET ROLE;`), because a non-superuser holds no grant option on a schema it doesn't own (D21);
 - run `ALTER ROLE dora_owner SET search_path = dora;` and `ALTER ROLE dora_app SET search_path = dora;`
 - be executed against database `dora` (`POSTGRES_DB=dora` locally).
 
@@ -489,7 +492,7 @@ Engine settings: `pool_pre_ping=True` and `pool_recycle=1800`. This lets connect
 
 | Service | Image / build | Requirements |
 |---|---|---|
-| `db` | `postgres:18.x` (pinned) | named volume `pgdata`; healthcheck `pg_isready -U postgres -d dora`; port `127.0.0.1:${DB_PORT_HOST:-5432}:5432` |
+| `db` | `postgres:18.6` (pinned) | named volume `pgdata` mounted at `/var/lib/postgresql` (PostgreSQL 18 images keep `PGDATA` under `/var/lib/postgresql/18/docker`); healthcheck `pg_isready -h 127.0.0.1 -U postgres -d dora` over TCP (D23); port `127.0.0.1:${DB_PORT_HOST:-5432}:5432` |
 | `migrate` | `api` image, `alembic upgrade head` | `depends_on: db: service_healthy`; `restart: "no"` |
 | `api` | `./api` multi-stage | `depends_on: migrate: service_completed_successfully`; **`HEALTHCHECK` targets `/healthz`** using Python `urllib` (no curl in slim images); non-root UID 10001; port `127.0.0.1:${API_PORT:-8000}:8000` |
 | `web` | `./web` multi-stage (Node 24 build → nginx-unprivileged) | `depends_on: api: service_healthy`; port `127.0.0.1:${WEB_PORT:-8080}:8080` |
@@ -820,6 +823,11 @@ If both pass, it posts `succeeded` with `finished_at = now`. If either fails, it
 | D18 | Node 24 is pinned in `.nvmrc`, and Makefile web targets fail fast unless `node` is 24 | Host tooling (Vitest, eslint, Playwright) must match the Node 24 build image; mirrors `actions/setup-node` with `node-version-file` in Phase B | Running web tooling in containers (Playwright E2E needs host `docker` and `git` for scenarios 7 and 10) |
 | D19 | `.env.example` contains a valid, clearly dev-only 32+ char `INGEST_API_KEY` | The documented cold start (`cp .env.example .env && make up`) must work with no other steps, and the app refuses short keys | A `change-me` placeholder (the app would refuse to start) |
 | D20 | The full stack (api + web + compose) is runnable from M0; `db` and `migrate` join in M1 | Honors the working agreement that `make up` works at the end of every milestone; proves the nginx proxy rules early | Adding compose and web only at M1 and M8 |
+| D21 | `bootstrap.sql` grants a non-superuser caller `SET`-only membership in `dora_owner`, and runs `GRANT USAGE ON SCHEMA dora` as `dora_owner` via `SET ROLE` | A test that bootstraps as a `CREATEROLE`, non-superuser database owner (like the RDS master user) failed with `permission denied for schema dora` on the plain grant. `INHERIT FALSE` keeps the master user from silently using owner privileges | Assuming a superuser; granting full (inheriting) membership |
+| D22 | Alembic connects with `search_path=pg_catalog`, set at connect time (`create_migration_engine`), and every migration name is schema-qualified | The owner role's default `search_path=dora` makes SQLAlchemy cache `dora` as the default schema, so reflection reports tables unqualified and `alembic check` sees every table as missing. A `SET` after connecting is too late | Unqualified metadata relying on `search_path`; a post-connect `SET` |
+| D23 | The `db` healthcheck runs `pg_isready` over TCP (`-h 127.0.0.1`) | During first-start init the image's temporary server listens only on the Unix socket, so a socket check can pass before init scripts finish | The doc's original socket-based check |
+| D24 | Every constraint and index is explicitly named (model naming convention plus explicit names) | Autogenerate, `alembic check`, and the problem+json constraint mapper (§6.3) all rely on stable names | PostgreSQL's generated names |
+| D25 | `DatabaseSettings` is separate from the API's `Settings` | `migrate` and `seed` need DB credentials but not API-only values such as `INGEST_API_KEY`, which the API requires at startup | One settings class with every value |
 
 ---
 
@@ -830,7 +838,7 @@ The build order of operations, referred to as **BOOO**. Work milestone by milest
 | # | Milestone | Done when | Status |
 |---|---|---|---|
 | M0 | Scaffold layout, tooling configs, Makefile skeleton, `.env.example`, `.gitignore`; FastAPI app with `/healthz` and `/version` | `make lint` runs | ✅ done |
-| M1 | `db` + `bootstrap.sql` + Alembic (default privileges, then §6.2 tables) + `migrate` service | `make up` brings db, migrate, and api up healthy from a cold volume; migration round-trip and bootstrap-idempotency tests pass | |
+| M1 | `db` + `bootstrap.sql` + Alembic (default privileges, then §6.2 tables) + `migrate` service | `make up` brings db, migrate, and api up healthy from a cold volume; migration round-trip and bootstrap-idempotency tests pass | ✅ done |
 | M2 | Services and Failures CRUD: problem+json, pagination, strong ETag / If-Match | integration tests green | |
 | M3 | Deployments CRUD + commit upsert + transitions + immutable fields | transition-matrix unit tests and integration tests green | |
 | M4 | Ingest endpoint (API key, idempotency, stale-event handling) | replay and out-of-order tests green | |

@@ -25,8 +25,8 @@ DEPLOY_STARTED_AT := $(BUILD_TIME)
 endif
 export GIT_SHA BUILD_TIME APP_VERSION DEPLOY_STARTED_AT
 
-.PHONY: help up down reset logs lint lint-api lint-web fmt test test-api test-web ci \
-        check-env check-node
+.PHONY: help up down reset logs migrate migration lint lint-api lint-web fmt test test-api \
+        test-web ci check-env check-node
 
 help: ## List targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk -F':.*?## ' '{printf "  %-14s %s\n", $$1, $$2}'
@@ -45,6 +45,16 @@ reset: check-env ## Delete all data (volumes), then start from cold
 
 logs: ## Follow logs from all services
 	$(COMPOSE) logs -f
+
+# ---- database ----
+
+migrate: check-env ## Apply migrations (alembic upgrade head)
+	$(COMPOSE) run --rm --build migrate
+
+migration: check-env ## Autogenerate a revision: make migration m="add foo"
+	@test -n "$(m)" || { echo 'usage: make migration m="message"' >&2; exit 1; }
+	$(COMPOSE) run --rm --build -v $(CURDIR)/api/alembic/versions:/app/alembic/versions \
+		migrate alembic revision --autogenerate -m "$(m)"
 
 # ---- quality ----
 
