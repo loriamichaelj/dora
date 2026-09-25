@@ -25,8 +25,8 @@ DEPLOY_STARTED_AT := $(BUILD_TIME)
 endif
 export GIT_SHA BUILD_TIME APP_VERSION DEPLOY_STARTED_AT
 
-.PHONY: help up down reset logs migrate migration lint lint-api lint-web fmt test test-api \
-        test-web ci check-env check-node
+.PHONY: help up down reset logs migrate migration seed seed-large analyze perf lint lint-api \
+        lint-web fmt test test-api test-web ci check-env check-node
 
 help: ## List targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk -F':.*?## ' '{printf "  %-14s %s\n", $$1, $$2}'
@@ -55,6 +55,23 @@ migration: check-env ## Autogenerate a revision: make migration m="add foo"
 	@test -n "$(m)" || { echo 'usage: make migration m="message"' >&2; exit 1; }
 	$(COMPOSE) run --rm --build -v $(CURDIR)/api/alembic/versions:/app/alembic/versions \
 		migrate alembic revision --autogenerate -m "$(m)"
+
+seed: check-env ## Load deterministic demo data (replaces earlier seed data)
+	$(COMPOSE) --profile seed run --rm --build seed
+	$(MAKE) --no-print-directory analyze
+
+seed-large: check-env ## Demo data plus ~100k deployments for the performance check
+	$(COMPOSE) --profile seed run --rm --build seed \
+		python -m app.seed --days 90 --seed 42 --large
+	$(MAKE) --no-print-directory analyze
+
+# The app role can't ANALYZE tables it doesn't own; refresh planner statistics
+# as postgres after a bulk load so the first queries get good plans.
+analyze:
+	$(COMPOSE) exec -T db psql -U postgres -d dora -qc 'ANALYZE dora.services, dora.deployments, dora.commits, dora.deployment_commits, dora.failures'
+
+perf: ## Time the org-wide 90-day DORA summary (run after seed-large)
+	python3 scripts/perf_check.py
 
 # ---- quality ----
 

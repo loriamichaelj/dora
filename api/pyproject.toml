@@ -43,6 +43,8 @@ ignore = ["S101"]
 # SQL is assembled only from module constants (the live-status list and a
 # fixed service filter); every value is a bound parameter. See the module doc.
 "app/dora/queries.py" = ["S608"]
+# Seeded, reproducible pseudo-randomness is the point of the demo-data generator.
+"app/seed.py" = ["S311"]
 
 [tool.mypy]
 python_version = "3.13"

@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Author** | M.L. |
-| **Status** | In build v0.11 (BOOO M6 complete) |
+| **Status** | In build v0.12 (BOOO M7 complete) |
 | **Date** | 2026-09-25 |
 | **Scope** | Phase A — full stack running end-to-end and tested on localhost via Docker Compose |
 | **Out of scope** | Phase B (AWS, IaC, GitHub Actions CI/CD, container orchestration, SSO) |
@@ -23,6 +23,7 @@
 | v0.9 | M4 decisions (D39–D42): 401 challenge header and auth-before-body; ingest response shape; partial updates from events; concurrent first deliveries collapse to one row. Coverage now traces greenlets, so reported coverage reflects code run through SQLAlchemy's async layer. |
 | v0.10 | M5 decisions (D43–D48): time-series bucket assignment per metric; bands judge unrounded values and rounding is half-up; zero deployments give `per_day: null`; unknown `service_id` is 422; fractional window `days`; service filter as a constant SQL fragment. Golden datasets A, B, C pass exactly, and the weekly expectations for A are extended to every field. |
 | v0.11 | M6 decisions (D49–D54): readiness probe is waited on, never cancelled; asyncpg connect and command timeouts; DB-unreachable errors are 503; unhandled errors become a problem+json 500 in middleware; route labels rebuilt from the route pattern; inbound request IDs validated. `/readyz` body shape and log field rules documented in §7.2 and §13. |
+| v0.12 | M7 decisions (D55–D58): deterministic, repeatable seeding via COPY; lead-time query restructured to meet the performance target (852 → 272 ms p95); error diffusion in the seed and scenario 9 read over the seed window; host scripts target Python 3.10+. |
 
 ---
 
@@ -450,7 +451,7 @@ Query parameters: `service_id` (optional; omit for org-wide), `environment` (def
 - Band classification happens in Python from the aggregates (a pure function). Round hours to 2 decimals and rates to 4.
   - Bands judge the **unrounded** value, so a displayed `0.1429` is still compared with 1/7 exactly. Rounding is half-up, not Python's banker's rounding (D44).
   - With zero counted deployments, `per_day` is `null` and its band is `null`, as golden dataset B requires; `count` and `deploy_days` are `0` (D45).
-- Lead time computes `first_live` only for commits shipped by a counted deployment (a candidate set), then takes their minimum live `finished_at` across all time. This gives the same result as scanning every commit and keeps the query proportional to the window.
+- Lead time groups every live deployment-commit link in the environment by commit, joining `commits` **before** grouping, and keeps only commits whose minimum `finished_at` falls in the window (`HAVING`). Both percentiles come from one sort (`percentile_cont(ARRAY[0.5, 0.9])`), and the metrics transaction sets `SET LOCAL work_mem = '16MB'` so sorts stay in memory (D56).
 - The optional service filter is appended as a constant SQL fragment rather than written as `(:id IS NULL OR ...)`, which would defeat index use under prepared-statement generic plans. Every value is a bound parameter (D48).
 
 ---
@@ -551,6 +552,11 @@ Engine settings: `pool_pre_ping=True` and `pool_recycle=1800`. This lets connect
 
 `--large` generates ~100k deployments for the performance check (§12).
 
+- **Deterministic:** the same `--seed`, `--days`, and `--end` (default: today, midnight UTC) produce identical rows, including UUIDs and SHAs. Timestamps are offsets from `--end`, so the data has the same shape whichever day it's generated.
+- **Repeatable:** `make seed` replaces seed-managed services (the six profile slugs plus `load-svc-*`) in one transaction and never touches any other service, such as `dora-tracker`. It runs as `dora_app` and loads with `COPY`; `make seed-large` loads ~100k deployments in about 20 seconds (D55).
+- **Realistic:** a deployment links only the commits new to its environment since that environment's last deployment; a failed pipeline leaves them to ship next time. Commits always predate the first deployment that ships them. Rates use error diffusion, so each service realizes its profile even from a handful of deployments (D57).
+- After seeding, the Makefile runs `ANALYZE` as `postgres`, because `dora_app` can't analyze tables it doesn't own.
+
 ### Makefile targets
 
 Every target is **non-interactive, exits non-zero on failure, and needs no TTY**, so the same targets run unchanged in GitHub Actions.
@@ -562,7 +568,9 @@ Every target is **non-interactive, exits non-zero on failure, and needs no TTY**
 | `make dev` | `docker compose -f compose.yaml -f compose.dev.yaml up --build` |
 | `make down` | stop the stack, keep data |
 | `make reset` | `down -v`, then `up`. ⚠ This **deletes self-tracking history** along with everything else. The first deployment after a reset records only the HEAD commit (§15.3). |
-| `make seed` | `docker compose --profile seed run --rm seed` |
+| `make seed` | `docker compose --profile seed run --rm seed`, then `ANALYZE` |
+| `make seed-large` | the seed plus `--large` (~100k deployments), then `ANALYZE` |
+| `make perf` | `scripts/perf_check.py`: times the org-wide 90-day summary and time series; fails if the summary p95 is 500 ms or more |
 | `make migrate` / `make migration m="msg"` | apply migrations / autogenerate a revision |
 | `make test` | `test-api`, `test-web`, then `e2e` |
 | `make test-api` | pytest + coverage; writes `reports/junit-api.xml` and `reports/coverage-api.xml` |
@@ -648,7 +656,7 @@ Layering rule: routers → services → repositories. Routers never touch the OR
 | Self-tracking script | pytest with temporary git repos + a stub HTTP server | commit-range selection (first run, normal, rebased history, dirty tree), payload shape, idempotent `external_id`, `/version` SHA mismatch → `failed`, API unreachable → exit 0 with a warning when `--best-effort` is set | must pass |
 | Unit (web) | Vitest + Testing Library | metric cards (including null states and the null rework band), forms, If-Match / 412 handling | key components covered |
 | E2E | Playwright against the Compose stack | §12.2 | all pass |
-| Performance (manual) | `seed --large` + timed requests | `/metrics/dora`, org-wide, 90-day window, 100k deployments: p95 < 500 ms locally | recorded in README |
+| Performance (manual) | `make seed-large` then `make perf` | `/metrics/dora`, org-wide, 90-day window, 100k deployments: p95 < 500 ms locally | recorded in README. M7 result (Apple M2, OrbStack, 100,221 deployments, 87,882 counted): summary p95 **272 ms** (p50 250 ms), time series p95 330 ms; a cold first run measured p95 428 ms. Before D56 the summary p95 was 852 ms. |
 
 Tests run with no `.env` present: test configuration supplies its own values.
 
@@ -695,7 +703,7 @@ One counted deployment whose single commit has `committed_at > finished_at`: lea
 6. Resolve the failure and confirm the recovery time card shows a value.
 7. **Liveness vs readiness:** `docker compose stop db` → `/readyz` returns 503, `/healthz` returns 200, the api container **stays running and healthy**, and the UI shows an error state. `docker compose start db` → everything recovers without restarting `api`.
 8. Concurrent edit: two browser contexts save the same service, and the second gets the conflict message.
-9. Seeded data: `checkout-api` deployment frequency band is **elite**, `legacy-billing` change fail rate band is **low**, and `new-svc` shows the empty state.
+9. Seeded data, over the seed's 90-day window: `checkout-api` deployment frequency band is **elite**, `legacy-billing` change fail rate band is **low**, and `new-svc` shows the empty state (D57).
 10. **Self-tracking:** in the E2E project, commit a change to a throwaway clone and run `record_deploy.py` against it. The `dora-tracker` service shows one `development` deployment whose `head_sha` equals that clone's HEAD and whose commit list matches `git log`. Running it again creates no duplicate.
 
 ---
@@ -885,6 +893,10 @@ If both pass, it posts `succeeded` with `finished_at = now`. If either fails, it
 | D52 | Unhandled exceptions become a problem+json 500 in the outermost application middleware | Starlette's catch-all handler runs outside user middleware, where the request ID is no longer attached; users need the ID to report a failure. No exception text reaches the client | FastAPI's `Exception` handler |
 | D53 | The route label is rebuilt from the matched route's own pattern: the literal request-path text before where the pattern matches, plus its template | FastAPI 0.141 nests included routers, so `scope["route"].path` is only `/services/{service_id}`. Private FastAPI internals were avoided | Reading FastAPI's private `_IncludedRouter`; labeling by raw path |
 | D54 | An inbound `X-Request-ID` is accepted only if it matches `^[A-Za-z0-9._:-]{1,128}$`; otherwise a UUIDv4 is generated | The ID is echoed in headers and written to logs, so arbitrary input could inject log noise or oversized headers | Accepting any value |
+| D55 | The seed generator is a pure function (UUIDv7s and SHAs drawn from the seeded RNG); a writer replaces seed-managed services in one transaction via `COPY` as `dora_app` | Determinism makes demo data and E2E expectations reproducible; replacing only seed-managed slugs makes `make seed` safe to rerun and keeps self-tracking history intact (§15.5); `COPY` loads 100k deployments in seconds | Posting through the API (minutes for `--large`); server-generated IDs (not reproducible); append-only seeding |
+| D56 | Lead time joins `commits` before grouping and filters the window in `HAVING`, with no candidate-commit pre-pass; both percentiles share one sort; metrics transactions use `SET LOCAL work_mem = '16MB'` | Measured against 100k deployments: the planner guessed ~750 rows out of the `HAVING` filter and ran ~150k index probes into `commits`; joining first lets it hash. Sorts spilled to disk at 4MB, and 16MB is where gains stopped. Summary p95 went from 852 ms to 272 ms | A denormalized first-live table (write-path complexity); a session-wide or server-wide `work_mem` increase (memory risk on small RDS instances) |
+| D57 | The seed realizes profile rates by error diffusion, and E2E scenario 9 reads bands over the seed's 90-day window | Independent coin flips gave `legacy-billing` zero failures in three deploys under seed 42. A monthly service has ~1 deploy per 30-day window, so its fail rate there can only be 0 or 1; over 90 days, diffusion guarantees ≥ 1/3, always the **low** band (tested across 20 seeds) | Picking a lucky seed; raising legacy's deploy frequency (contradicts its profile) |
+| D58 | Host-side scripts (`scripts/*.py`) use only the standard library and stay compatible with Python 3.10 | They run on the host's `python3` without a virtualenv; this machine's is 3.10, which lacks `datetime.UTC`. The same constraint applies to `record_deploy.py` (§15.2) | Requiring 3.11+ or `uv run` for host scripts |
 
 ---
 
@@ -901,7 +913,7 @@ The build order of operations, referred to as **BOOO**. Work milestone by milest
 | M4 | Ingest endpoint (API key, idempotency, stale-event handling) | replay and out-of-order tests green | ✅ done |
 | M5 | DORA engine (queries, bands, summary + timeseries) | **golden datasets A, B, C pass exactly** | ✅ done |
 | M6 | `/readyz`, `/metrics`, structured logging, request/trace IDs, UTC session, SSL config | E2E scenario 7 works manually || ✅ done |
-| M7 | Seed generator (normal + `--large`) | `make seed` produces the §10 profiles; perf check recorded | |
+| M7 | Seed generator (normal + `--large`) | `make seed` produces the §10 profiles; perf check recorded || ✅ done |
 | M8 | Frontend: API client + types, layout, Dashboard | dashboard renders seeded bands correctly | |
 | M9 | Frontend: Services, Deployments, Failures pages; conflict handling | Vitest green | |
 | M10 | Playwright E2E in the isolated project, `compose.dev.yaml`, multi-arch build check, `make ci`, README | E2E green without touching dev data | |

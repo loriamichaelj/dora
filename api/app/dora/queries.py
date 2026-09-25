@@ -16,7 +16,7 @@ facts land in the bucket of its finished_at; a lead-time sample lands in the
 bucket of its first_live deployment (D43).
 
 Safety: the SQL strings are assembled only from constants in this module (the
-live-status list and one fixed service-filter fragment). Every value is a
+live-status list, one fixed service-filter fragment, and METRICS_WORK_MEM). Every value is a
 bound parameter. The service filter is added or omitted rather than written as
 `(:id IS NULL OR ...)`, which would defeat index use under generic plans.
 """
@@ -48,33 +48,30 @@ def _counted_cte(service_filter: str) -> str:
 
 
 def _lead_time_ctes(service_filter: str) -> str:
-    # Only commits shipped by a counted deployment can be samples, so start
-    # from those, then find each one's first live deployment across all time.
+    # Each commit's first live deployment across all time, kept only when that
+    # deployment is in the window (HAVING). Commits are joined before grouping:
+    # grouping by their primary key carries committed_at along, and the planner
+    # sees a plain join it can hash. Joining after the HAVING filter made it
+    # guess ~750 rows and run ~150k index probes instead (D56).
     return f"""
-    candidate_commits AS (
-        SELECT DISTINCT dc.commit_id
-          FROM dora.deployment_commits dc
-          JOIN counted c ON c.id = dc.deployment_id
-    ),
     first_live AS (
-        SELECT dc.commit_id, min(d.finished_at) AS first_finished_at
-          FROM candidate_commits cc
-          JOIN dora.deployment_commits dc ON dc.commit_id = cc.commit_id
+        SELECT cm.id, cm.committed_at, min(d.finished_at) AS first_finished_at
+          FROM dora.deployment_commits dc
           JOIN dora.deployments d ON d.id = dc.deployment_id
+          JOIN dora.commits cm ON cm.id = dc.commit_id
          WHERE d.environment = :environment
            AND d.status IN {_LIVE}
            {service_filter}
-         GROUP BY dc.commit_id
+         GROUP BY cm.id
+        HAVING min(d.finished_at) >= :from_ts AND min(d.finished_at) < :to_ts
     ),
     lead_samples AS (
-        SELECT fl.first_finished_at,
+        SELECT first_finished_at,
                CAST(
-                   EXTRACT(EPOCH FROM (fl.first_finished_at - cm.committed_at)) / 3600
+                   EXTRACT(EPOCH FROM (first_finished_at - committed_at)) / 3600
                    AS double precision
                ) AS hours
-          FROM first_live fl
-          JOIN dora.commits cm ON cm.id = fl.commit_id
-         WHERE fl.first_finished_at >= :from_ts AND fl.first_finished_at < :to_ts
+          FROM first_live
     )"""
 
 
@@ -88,6 +85,16 @@ def _recovery_cte() -> str:
           FROM dora.failures f
           JOIN counted c ON c.id = f.deployment_id
     )"""
+
+
+# Enough for the percentile sorts and hash aggregates of ~150k samples to stay
+# in memory (measured: 4MB spills to disk; 16MB is where gains stop). Scoped to
+# the metrics transaction with SET LOCAL, so other queries keep the default.
+METRICS_WORK_MEM = "16MB"
+
+
+async def _set_work_mem(session: AsyncSession) -> None:
+    await session.execute(text(f"SET LOCAL work_mem = '{METRICS_WORK_MEM}'"))
 
 
 def _params(
@@ -134,19 +141,20 @@ async def summary(
         (SELECT count(*) FILTER (WHERE has_failure) FROM counted) AS failed_deployments,
         (SELECT count(*) FILTER (WHERE kind = 'remediation') FROM counted)
             AS remediation_deployments,
-        (SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY hours)
-           FROM lead_samples WHERE hours >= 0) AS lead_median_hours,
-        (SELECT percentile_cont(0.9) WITHIN GROUP (ORDER BY hours)
-           FROM lead_samples WHERE hours >= 0) AS lead_p90_hours,
-        (SELECT count(*) FROM lead_samples WHERE hours >= 0) AS lead_samples,
-        (SELECT count(*) FROM lead_samples WHERE hours < 0) AS lead_excluded,
+        -- One sort for both percentiles.
+        (SELECT percentile_cont(ARRAY[0.5, 0.9]) WITHIN GROUP (ORDER BY hours)
+           FROM lead_samples WHERE hours >= 0) AS lead_percentiles,
+        (SELECT count(*) FILTER (WHERE hours >= 0) FROM lead_samples) AS lead_samples,
+        (SELECT count(*) FILTER (WHERE hours < 0) FROM lead_samples) AS lead_excluded,
         (SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY hours)
            FROM recovery WHERE NOT is_open) AS recovery_median_hours,
         (SELECT count(*) FROM recovery WHERE NOT is_open) AS recovery_samples,
         (SELECT count(*) FROM recovery WHERE is_open) AS open_failures
     """
-    row = (await session.execute(text(sql), params)).one()
-    return SummaryRow(**row._asdict())
+    await _set_work_mem(session)
+    row = (await session.execute(text(sql), params)).one()._asdict()
+    median, p90 = row.pop("lead_percentiles") or (None, None)
+    return SummaryRow(**row, lead_median_hours=median, lead_p90_hours=p90)
 
 
 @dataclass(frozen=True)
@@ -224,5 +232,6 @@ async def timeseries(
       LEFT JOIN recovery_agg r ON r.start = b.start
      ORDER BY b.start
     """
+    await _set_work_mem(session)
     rows = (await session.execute(text(sql), params)).all()
     return [BucketRow(**row._asdict()) for row in rows]

@@ -83,6 +83,21 @@ services:
     restart: unless-stopped
     stop_grace_period: 30s
 
+  # One-shot demo data (§10): `make seed`. Never started by `up`.
+  seed:
+    profiles: ["seed"]
+    build: *api-build
+    image: dora-api:local
+    command: ["python", "-m", "app.seed", "--days", "90", "--seed", "42"]
+    environment:
+      <<: *db-connection
+      DB_USER: dora_app
+      DB_PASSWORD: ${DORA_APP_PASSWORD:?set DORA_APP_PASSWORD in .env}
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: "no"
+
   web:
     build:
       context: ./web
