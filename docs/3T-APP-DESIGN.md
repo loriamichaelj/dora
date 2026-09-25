@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Author** | M.L. |
-| **Status** | In build v0.14 (BOOO M9 complete) |
+| **Status** | In build v0.15 (BOOO M10 complete) |
 | **Date** | 2026-09-25 |
 | **Scope** | Phase A — full stack running end-to-end and tested on localhost via Docker Compose |
 | **Out of scope** | Phase B (AWS, IaC, GitHub Actions CI/CD, container orchestration, SSO) |
@@ -26,6 +26,7 @@
 | v0.12 | M7 decisions (D55–D58): deterministic, repeatable seeding via COPY; lead-time query restructured to meet the performance target (852 → 272 ms p95); error diffusion in the seed and scenario 9 read over the seed window; host scripts target Python 3.10+. |
 | v0.13 | M8 decisions (D59–D62): isolated codegen for the TypeScript 5 peer; the typed client and `ApiError`; URL-held dashboard filters; UTC bucket labels and fixed-unit axes. The dashboard renders the seeded bands and scenario 7's error state in a real browser. |
 | v0.14 | M9 decisions (D63–D65) and a revision of D61 (preset windows end at the end of the current minute). Services, Deployments, and Failures pages verified in a real browser, including E2E scenarios 5, 6, and 8. |
+| v0.15 | M10 decisions (D66–D70): isolated E2E stack with its own env file; scenario 10 pending M11; `compose.dev.yaml`; the multi-arch builder; `db` runs as `postgres`. §16 items ticked where verified; self-tracking remains for M11. |
 
 ---
 
@@ -518,6 +519,7 @@ Engine settings: `pool_pre_ping=True` and `pool_recycle=1800`. This lets connect
 ### Files
 - `compose.yaml` is the default production-like stack.
 - `compose.dev.yaml` adds hot reload: the Vite dev server on 5173 with an `/api` proxy, `uvicorn --reload`, and bind mounts.
+  - `api` runs `uvicorn --reload` against `./api/app` (bind-mounted read-only) with docs on; `web-dev` runs the Vite dev server from the stock `node:24` image with `node_modules` in a named volume, so Linux binaries never land in the host checkout. `web-dev` runs as root: it's dev-only tooling, not an image this project builds (D68).
 
 > ⚠ Do **not** name the dev file `compose.override.yaml`. Compose merges that file automatically on every `up`.
 
@@ -525,7 +527,7 @@ Engine settings: `pool_pre_ping=True` and `pool_recycle=1800`. This lets connect
 
 | Service | Image / build | Requirements |
 |---|---|---|
-| `db` | `postgres:18.6` (pinned) | named volume `pgdata` mounted at `/var/lib/postgresql` (PostgreSQL 18 images keep `PGDATA` under `/var/lib/postgresql/18/docker`); healthcheck `pg_isready -h 127.0.0.1 -U postgres -d dora` over TCP (D23); port `127.0.0.1:${DB_PORT_HOST:-5432}:5432` |
+| `db` | `postgres:18.6` (pinned) | named volume `pgdata` mounted at `/var/lib/postgresql` (PostgreSQL 18 images keep `PGDATA` under `/var/lib/postgresql/18/docker`); healthcheck `pg_isready -h 127.0.0.1 -U postgres -d dora` over TCP (D23); runs as `user: postgres` so `exec` is non-root too (D70); port `127.0.0.1:${DB_PORT_HOST:-5432}:5432` |
 | `migrate` | `api` image, `alembic upgrade head` | `depends_on: db: service_healthy`; `restart: "no"` |
 | `api` | `./api` multi-stage | `depends_on: migrate: service_completed_successfully`; **`HEALTHCHECK` targets `/healthz`** using Python `urllib` (no curl in slim images); non-root UID 10001; port `127.0.0.1:${API_PORT:-8000}:8000` |
 | `web` | `./web` multi-stage (Node 24 build → nginx-unprivileged) | `depends_on: api: service_healthy`; port `127.0.0.1:${WEB_PORT:-8080}:8080` |
@@ -589,6 +591,8 @@ Every target is **non-interactive, exits non-zero on failure, and needs no TTY**
 | `make openapi-check` | regenerate the schema, then fail if `git diff` shows changes (catches contract drift) |
 | `make ci` | `lint`, `openapi-check`, `test` — the single entry point Phase B's workflow will call |
 | `make logs` | `docker compose logs -f` |
+| `make build-multiarch` | build both images for `linux/amd64` and `linux/arm64` with a `docker-container` buildx builder, output to cache only; slow (amd64 is emulated on Apple silicon), so not part of `make ci` (D69) |
+| `make e2e-browsers` | install Playwright's Chromium (a no-op once installed) |
 
 Document the minimum Docker Engine and Compose versions in the README.
 
@@ -665,7 +669,7 @@ Layering rule: routers → services → repositories. Routers never touch the OR
 | Security | pytest | the `dora_app` role cannot run DDL; `/metrics` isn't reachable via nginx; the ingest endpoint rejects a missing or bad key | must pass |
 | Self-tracking script | pytest with temporary git repos + a stub HTTP server | commit-range selection (first run, normal, rebased history, dirty tree), payload shape, idempotent `external_id`, `/version` SHA mismatch → `failed`, API unreachable → exit 0 with a warning when `--best-effort` is set | must pass |
 | Unit (web) | Vitest + Testing Library | metric cards (including null states and the null rework band), forms, If-Match / 412 handling | key components covered |
-| E2E | Playwright against the Compose stack | §12.2 | all pass |
+| E2E | Playwright against the isolated Compose stack (`make e2e`) | §12.4, one worker, in order (scenario 7 stops the database); each test creates its own uniquely named service | all pass. Scenario 10 is `fixme` until M11 delivers `record_deploy.py` (D67) |
 | Performance (manual) | `make seed-large` then `make perf` | `/metrics/dora`, org-wide, 90-day window, 100k deployments: p95 < 500 ms locally | recorded in README. M7 result (Apple M2, OrbStack, 100,221 deployments, 87,882 counted): summary p95 **272 ms** (p50 250 ms), time series p95 330 ms; a cold first run measured p95 428 ms. Before D56 the summary p95 was 852 ms. |
 
 Tests run with no `.env` present: test configuration supplies its own values.
@@ -830,18 +834,18 @@ If both pass, it posts `succeeded` with `finished_at = now`. If either fails, it
 
 ## 16. Phase A Definition of Done
 
-- [ ] `git clone` → `cp .env.example .env` → `make up` → app at `http://localhost:8080` with no other manual steps.
-- [ ] `make reset && make up` succeeds repeatedly, with no restart loops.
-- [ ] All endpoints are implemented per §7; `/docs` renders when `ENABLE_API_DOCS=true`.
-- [ ] Golden datasets A, B, and C (§12.1–12.3) pass exactly.
-- [ ] `make ci` is green end-to-end, with coverage gates met and reports written to `reports/`.
-- [ ] `make lint` is clean: ruff, mypy strict, eslint, and `tsc`.
-- [ ] All containers run as non-root (`docker compose exec <svc> id`).
-- [ ] Images build for both `linux/amd64` and `linux/arm64` (`docker buildx build --platform linux/amd64,linux/arm64`).
-- [ ] No secrets in git or image layers.
-- [ ] `db/bootstrap.sql` is idempotent (run twice → no errors, no changes).
+- [x] `git clone` → `cp .env.example .env` → `make up` → app at `http://localhost:8080` with no other manual steps.
+- [x] `make reset && make up` succeeds repeatedly, with no restart loops.
+- [x] All endpoints are implemented per §7; `/docs` renders when `ENABLE_API_DOCS=true`.
+- [x] Golden datasets A, B, and C (§12.1–12.3) pass exactly.
+- [x] `make ci` is green end-to-end, with coverage gates met and reports written to `reports/`. Scenario 10 is pending M11.
+- [x] `make lint` is clean: ruff, mypy strict, eslint, and `tsc`.
+- [x] All containers run as non-root (`docker compose exec <svc> id`). db 999, api/migrate/seed 10001, web 101; the dev-only `web-dev` is exempt (D68).
+- [x] Images build for both `linux/amd64` and `linux/arm64` (`docker buildx build --platform linux/amd64,linux/arm64`). `make build-multiarch`.
+- [x] No secrets in git or image layers. Only `.env.example` placeholders and the E2E stack's test-only values are committed; image history and env hold none.
+- [x] `db/bootstrap.sql` is idempotent (run twice → no errors, no changes).
 - [ ] **Self-tracking:** after M11, every `make up` from a clean tree adds a `dora-tracker` deployment in `development` whose `head_sha` matches `/version`. `make e2e` leaves that history untouched.
-- [ ] The README covers quick start, minimum Docker/Compose versions, architecture summary, Makefile targets, metric definitions (linking to §3), the benchmark disclaimer, and the performance result.
+- [x] The README covers quick start, minimum Docker/Compose versions, architecture summary, Makefile targets, metric definitions (linking to §3), the benchmark disclaimer, and the performance result. It states the tested Docker and Compose versions rather than an unverified minimum.
 
 ---
 
@@ -914,6 +918,11 @@ If both pass, it posts `succeeded` with `finished_at = now`. If either fails, it
 | D63 | One mutation-error handler: 412 → conflict toast plus refetch; field errors inline via `setError`; everything else → toast with the request ID | Every form behaves the same, and a user always has either a fix-this-field message or a request ID to report | Per-form error handling |
 | D64 | Dialogs use the native `<dialog>` with `showModal()` | Built-in focus trap, Escape, and inert background meet the keyboard-navigable requirement without a library | A custom modal with a focus-trap dependency |
 | D65 | The deployment page offers only the forward transitions (§7.7); completing an in-progress deployment sets `finished_at` to now; marking rolled back opens the "Record failure?" prompt, whose "Not now" records nothing | The UI can't produce a 409 by offering an invalid move; the prompt makes the rollback-vs-failure distinction (D4) explicit instead of silently inferring a failure | Showing all statuses in a dropdown; auto-creating a failure on rollback |
+| D66 | `make e2e` uses its own project (`dora-e2e`), ports (18080/18000/15432), volume, and a committed test-only env file passed with `--env-file`; it cold-starts, seeds, runs Playwright with one worker, and always tears down while keeping Playwright's exit code | The dev stack keeps running and its data is untouched, verified by comparing its row counts, latest update time, and container start times before and after a run. The committed env file means E2E never depends on a developer's `.env` | Sharing the dev stack; reading `.env`; leaving the stack up after a failure |
+| D67 | Scenario 10 is written as `test.fixme` until M11 | Its subject, `record_deploy.py`, doesn't exist yet; marking it pending is honest, where a stub or an omission would not be | Faking it; leaving it out of the suite |
+| D68 | `compose.dev.yaml` bind-mounts `api/app` read-only for `--reload`, and runs Vite from the stock Node 24 image with `node_modules` in a named volume, as root | Hot reload without rebuilding images; macOS and Linux `node_modules` never mix. Root is confined to the dev-only helper container | A separate dev Dockerfile; a host-mounted `node_modules` |
+| D69 | `make build-multiarch` uses a dedicated `docker-container` buildx builder with `--output type=cacheonly`, outside `make ci` | The default `docker` driver can't build multi-platform images; emulated amd64 builds take minutes, too slow for every local CI run. Phase B's pipeline can run it on native runners | Adding it to `make ci`; skipping the check |
+| D70 | `db` runs with `user: postgres` | The official image starts as root and only drops privileges for the server, so `docker compose exec db id` reported root, failing §16. Its data and socket directories are already owned by `postgres`; a cold start and the existing dev volume both work | Accepting a root `exec`; a custom Postgres image |
 
 ---
 
@@ -933,7 +942,7 @@ The build order of operations, referred to as **BOOO**. Work milestone by milest
 | M7 | Seed generator (normal + `--large`) | `make seed` produces the §10 profiles; perf check recorded || ✅ done |
 | M8 | Frontend: API client + types, layout, Dashboard | dashboard renders seeded bands correctly || ✅ done |
 | M9 | Frontend: Services, Deployments, Failures pages; conflict handling | Vitest green || ✅ done |
-| M10 | Playwright E2E in the isolated project, `compose.dev.yaml`, multi-arch build check, `make ci`, README | E2E green without touching dev data | |
+| M10 | Playwright E2E in the isolated project, `compose.dev.yaml`, multi-arch build check, `make ci`, README | E2E green without touching dev data || ✅ done (scenario 10 pending M11) |
 | M11 | **Self-tracking:** `scripts/record_deploy.py` + tests, `GIT_SHA` build-arg plumbing, `make up` auto-record, `make record-deploy` | §15 behaviors verified; **from this commit on, the tracker records its own builds**; §16 checklist complete | |
 
 **Working agreements for the implementer:**

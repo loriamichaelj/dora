@@ -1,0 +1,45 @@
+# Hot-reload overlay (§10): `make dev`
+#   docker compose -f compose.yaml -f compose.dev.yaml up --build
+#
+# - api reloads on changes under api/app (bind-mounted read-only).
+# - web-dev serves the Vite dev server on http://localhost:5173 with HMR and
+#   proxies /api, /healthz, /readyz, /version to the api (no CORS anywhere).
+# - The production-like nginx `web` on :8080 keeps running alongside.
+#
+# Deliberately NOT named compose.override.yaml: Compose would merge that file
+# into every plain `docker compose up`.
+
+services:
+  api:
+    command:
+      [
+        "uvicorn", "app.main:app",
+        "--host", "0.0.0.0", "--port", "8000",
+        "--reload", "--reload-dir", "/app/app",
+        "--proxy-headers", "--forwarded-allow-ips", "*",
+      ]
+    environment:
+      ENABLE_API_DOCS: "true"
+      LOG_LEVEL: DEBUG
+    volumes:
+      - ./api/app:/app/app:ro
+
+  web-dev:
+    image: node:24.21.0-trixie-slim
+    working_dir: /web
+    # Install into the named volume (Linux binaries), never the host's
+    # node_modules (macOS binaries), then start Vite.
+    command: ["sh", "-c", "npm ci --no-audit --no-fund && npm run dev -- --host 0.0.0.0"]
+    environment:
+      VITE_API_PROXY_TARGET: http://api:8000
+    volumes:
+      - ./web:/web
+      - web_node_modules:/web/node_modules
+    ports:
+      - "127.0.0.1:5173:5173"
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  web_node_modules:

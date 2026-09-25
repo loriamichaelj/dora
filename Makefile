@@ -11,6 +11,11 @@ REPORTS := $(CURDIR)/reports
 OPENAPI_JSON := web/src/api/openapi.json
 SCHEMA_TS := web/src/api/schema.d.ts
 
+# The isolated E2E stack (§10, §15.5): its own project name, volume, ports,
+# and env file, so it never touches the dev stack's data or reads .env.
+E2E_ENV := web/e2e/e2e.env
+E2E_COMPOSE := $(COMPOSE) -p dora-e2e --env-file $(E2E_ENV) -f compose.yaml
+
 # Build info, captured once at parse time (before any build starts) and
 # passed to `docker compose build` through build.args interpolation.
 ifeq ($(origin GIT_SHA), undefined)
@@ -28,7 +33,8 @@ endif
 export GIT_SHA BUILD_TIME APP_VERSION DEPLOY_STARTED_AT
 
 .PHONY: help up down reset logs migrate migration seed seed-large analyze perf lint lint-api \
-        lint-web fmt test test-api test-web openapi openapi-check ci check-env check-node
+        lint-web fmt test test-api test-web e2e e2e-browsers openapi openapi-check ci \
+        build-multiarch dev check-env check-node
 
 help: ## List targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk -F':.*?## ' '{printf "  %-14s %s\n", $$1, $$2}'
@@ -47,6 +53,21 @@ reset: check-env ## Delete all data (volumes), then start from cold
 
 logs: ## Follow logs from all services
 	$(COMPOSE) logs -f
+
+dev: check-env ## Hot reload: api --reload, Vite dev server on :5173
+	$(COMPOSE) -f compose.yaml -f compose.dev.yaml up --build
+
+# Both images must build for amd64 and arm64 (§10, §16). The default docker
+# driver can't build multi-platform images, so use a docker-container builder,
+# created once. --output type=cacheonly builds without loading or pushing.
+MULTIARCH_BUILDER := dora-multiarch
+build-multiarch: ## Build api and web images for linux/amd64 and linux/arm64
+	docker buildx inspect $(MULTIARCH_BUILDER) >/dev/null 2>&1 || \
+		docker buildx create --name $(MULTIARCH_BUILDER) --driver docker-container >/dev/null
+	docker buildx build --builder $(MULTIARCH_BUILDER) --platform linux/amd64,linux/arm64 \
+		--output type=cacheonly ./api
+	docker buildx build --builder $(MULTIARCH_BUILDER) --platform linux/amd64,linux/arm64 \
+		--output type=cacheonly ./web
 
 # ---- database ----
 
@@ -116,7 +137,7 @@ openapi-check: openapi ## Fail if the committed API contract is out of date
 
 # ---- tests ----
 
-test: test-api test-web ## All test suites
+test: test-api test-web e2e ## All test suites: api, web, then E2E
 
 test-api: ## pytest + coverage -> reports/
 	@mkdir -p $(REPORTS)
@@ -128,6 +149,25 @@ test-web: check-node web/node_modules/.package-lock.json ## Vitest -> reports/
 	@mkdir -p $(REPORTS)
 	cd web && npx vitest run --reporter=default --reporter=junit \
 		--outputFile.junit=$(REPORTS)/junit-web.xml
+
+# ---- E2E ----
+
+e2e-browsers: check-node web/node_modules/.package-lock.json
+	cd web && npx playwright install chromium
+
+# Cold start from an empty volume, seed, run Playwright, and always tear down,
+# keeping Playwright's exit code. Traces and screenshots of failures are kept
+# in reports/playwright/.
+e2e: check-node web/node_modules/.package-lock.json e2e-browsers ## Playwright E2E in the isolated dora-e2e stack
+	@mkdir -p $(REPORTS)
+	$(E2E_COMPOSE) down -v --remove-orphans
+	$(E2E_COMPOSE) up -d --build --wait web
+	$(E2E_COMPOSE) --profile seed run --rm --build seed
+	$(E2E_COMPOSE) exec -T db psql -U postgres -d dora -qc 'ANALYZE'
+	@status=0; \
+		(cd web && E2E_BASE_URL=http://localhost:18080 npx playwright test) || status=$$?; \
+		$(E2E_COMPOSE) down -v --remove-orphans; \
+		exit $$status
 
 ci: lint openapi-check test ## Single entry point for CI
 
