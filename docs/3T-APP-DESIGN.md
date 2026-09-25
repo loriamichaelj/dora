@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Author** | M.L. |
-| **Status** | In build v0.8 (BOOO M3 complete) |
+| **Status** | In build v0.9 (BOOO M4 complete) |
 | **Date** | 2026-09-25 |
 | **Scope** | Phase A — full stack running end-to-end and tested on localhost via Docker Compose |
 | **Out of scope** | Phase B (AWS, IaC, GitHub Actions CI/CD, container orchestration, SSO) |
@@ -20,6 +20,7 @@
 | v0.6 | M2 decisions (D26–D31): problem `type` URIs and the `errors[]` item shape; `If-Match` accepts `*` and lists; row locks make the version check atomic; failure `deployment_id` is patchable and revalidated; failure responses carry `service_id`; services commit explicitly. Default sorts and extra length limits documented in §7.3 and §7.5. |
 | v0.7 | M3 decisions (D32–D37): `in_progress` must not carry `finished_at`; SHAs normalized to lowercase; commit upsert keeps the whole first-written row; `PATCH /deployments` accepts additive `commits[]`; `finished_at` can't move past a linked failure; list/detail shapes and sort order. |
 | v0.8 | Commits are classified as **deployment commits** (shipped by ≥1 deployment) or **non-deployment commits** (D38). Deleting a service is blocked only by deployments; its non-deployment commits are deleted with it. |
+| v0.9 | M4 decisions (D39–D42): 401 challenge header and auth-before-body; ingest response shape; partial updates from events; concurrent first deliveries collapse to one row. Coverage now traces greenlets, so reported coverage reflects code run through SQLAlchemy's async layer. |
 
 ---
 
@@ -370,7 +371,7 @@ Create request example:
 
 `POST /api/v1/events/deployments`
 
-- **Auth:** header `X-API-Key` must match `INGEST_API_KEY`, compared with `hmac.compare_digest`. Missing or invalid returns 401. This is the only authenticated endpoint in Phase A.
+- **Auth:** header `X-API-Key` must match `INGEST_API_KEY`, compared with `hmac.compare_digest`. Missing or invalid returns 401 with `WWW-Authenticate: ApiKey realm="dora-ingest", header="X-API-Key"`. The key is checked before the body is validated, so an unauthenticated caller learns nothing about the schema (D39). The key is never logged. This is the only authenticated endpoint in Phase A.
 - **Identifies** the service by `service_slug`. An unknown slug returns 422. Services are **never** auto-created, so a pipeline typo can't create junk services.
 - **Idempotent upsert** on `(service, external_id)`, where `external_id` is required. Recommended format for GitHub Actions: `gha-<run_id>-<run_attempt>-<environment>`.
   - A new record returns `201`.
@@ -378,6 +379,11 @@ Create request example:
   - An identical replay returns `200` with no change and no version bump.
   - A **stale event** (see §7.7) returns `200` with the current resource, unchanged, plus a `Warning`-style field `"ignored": "stale_event"`. This is not an error, because CI retries and out-of-order delivery are normal.
 - A pipeline typically posts `in_progress` at job start and the terminal status at job end. `kind` defaults to `planned`; a hotfix workflow sends `remediation`.
+- **Response:** the deployment detail (as `GET /deployments/{id}`) plus `ignored`, which is `null` unless the event was stale. `201` adds `Location`; every response carries `ETag` (D40).
+- **Updates are partial:** on an existing deployment, only the fields present in the event are applied. An omitted field is left unchanged; in particular the `kind` default applies only at creation. `commits[]` is additive, as with `PATCH` (D35, D41). `environment` and `external_id` are immutable (422).
+- **A stale event changes nothing at all,** not even its non-status fields.
+- **Concurrent first deliveries** of a new `external_id` produce exactly one deployment: the insert runs in a savepoint, and a unique violation (or a duplicate that became visible) turns the losing request into an update (D42).
+- Ingest and CRUD share the `(service, external_id)` space: an event whose `external_id` matches a CRUD-created deployment updates it.
 
 ```json
 {
@@ -848,6 +854,10 @@ If both pass, it posts `succeeded` with `finished_at = now`. If either fails, it
 | D36 | Moving a live deployment's `finished_at` later than a linked failure's `detected_at` is a 409 | Preserves the §6.3 rule that a failure is detected at or after its deployment finished | Re-checking only on failure writes |
 | D37 | Deployment list items omit `commits`/`failures`; detail orders commits newest first and failures by `detected_at`; `finished_at` sorts put unfinished rows last | Keeps list pages small; the detail view reads naturally | Nested arrays in every list item |
 | D38 | Commits are classified as deployment commits or non-deployment commits, derived from `deployment_commits`. Only deployments (and so their deployment commits) block deleting a service; non-deployment commits are deleted with it | Commits have no delete API, so under the original rule a service became undeletable once any deployment with commits was deleted. Non-deployment commits feed no metric. Deriving the class avoids a flag that could drift from the links. The service row lock blocks a concurrent deployment insert (its FK check needs a key-share lock), so no commit can be linked mid-delete | Keeping the original rule (service undeletable); a commits delete API; a stored `is_deployed` flag; deleting orphaned commits eagerly on deployment delete |
+| D39 | Ingest's 401 carries `WWW-Authenticate: ApiKey realm="dora-ingest", header="X-API-Key"`, and the key is checked before body validation | RFC 9110 requires a challenge on 401; checking first means unauthenticated callers can't probe the schema | FastAPI's default 403 from `APIKeyHeader`; validating the body first |
+| D40 | Ingest returns the deployment detail plus `ignored` (`null` or `"stale_event"`) | One shape for all outcomes keeps the pipeline client trivial; `201`/`200` and the ETag tell it what happened | A separate envelope for stale events |
+| D41 | Ingest updates apply only the fields present in the event | A terminal event from a different step may omit fields such as `deployed_by`; defaults like `kind: planned` must not overwrite a `remediation` set by the first event | Full replacement with defaults |
+| D42 | Concurrent first deliveries collapse to one row: savepoint insert, and on a `uq_service_external` violation or a visible duplicate, retry as an update | Webhook and CI retries can arrive simultaneously; proven by a 5-way concurrent test (one 201, four 200) | A 409 for the loser; table-level locking |
 
 ---
 
@@ -861,7 +871,7 @@ The build order of operations, referred to as **BOOO**. Work milestone by milest
 | M1 | `db` + `bootstrap.sql` + Alembic (default privileges, then §6.2 tables) + `migrate` service | `make up` brings db, migrate, and api up healthy from a cold volume; migration round-trip and bootstrap-idempotency tests pass | ✅ done |
 | M2 | Services and Failures CRUD: problem+json, pagination, strong ETag / If-Match | integration tests green | ✅ done |
 | M3 | Deployments CRUD + commit upsert + transitions + immutable fields | transition-matrix unit tests and integration tests green | ✅ done |
-| M4 | Ingest endpoint (API key, idempotency, stale-event handling) | replay and out-of-order tests green | |
+| M4 | Ingest endpoint (API key, idempotency, stale-event handling) | replay and out-of-order tests green | ✅ done |
 | M5 | DORA engine (queries, bands, summary + timeseries) | **golden datasets A, B, C pass exactly** | |
 | M6 | `/readyz`, `/metrics`, structured logging, request/trace IDs, UTC session, SSL config | E2E scenario 7 works manually | |
 | M7 | Seed generator (normal + `--large`) | `make seed` produces the §10 profiles; perf check recorded | |

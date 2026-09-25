@@ -8,7 +8,7 @@ violations (the §6.3 backstop) into the same shape.
 """
 
 from http import HTTPStatus
-from typing import Any
+from typing import Any, ClassVar
 
 import structlog
 from fastapi import FastAPI, Request
@@ -40,9 +40,10 @@ class ProblemDetail(BaseModel):
     errors: list[FieldError] | None = None
 
 
-class Problem(Exception):  # a Problem is the error, not a wrapper around one
+class Problem(Exception):
     status: HTTPStatus = HTTPStatus.INTERNAL_SERVER_ERROR
     slug: str | None = None
+    headers: ClassVar[dict[str, str] | None] = None
 
     def __init__(
         self,
@@ -94,6 +95,10 @@ class PreconditionRequired(Problem):
 class Unauthorized(Problem):
     status = HTTPStatus.UNAUTHORIZED
     slug = "unauthorized"
+    # RFC 9110 requires a challenge on 401. The scheme names the header to send.
+    headers: ClassVar[dict[str, str] | None] = {
+        "WWW-Authenticate": 'ApiKey realm="dora-ingest", header="X-API-Key"'
+    }
 
 
 def field_error(
@@ -138,7 +143,12 @@ def _location_and_field(loc: tuple[Any, ...]) -> tuple[str, str]:
 async def handle_problem(request: Request, exc: Exception) -> JSONResponse:
     assert isinstance(exc, Problem)
     return problem_response(
-        request, exc.status, type_=exc.type_uri, detail=exc.detail, errors=exc.errors
+        request,
+        exc.status,
+        type_=exc.type_uri,
+        detail=exc.detail,
+        errors=exc.errors,
+        headers=exc.headers,
     )
 
 

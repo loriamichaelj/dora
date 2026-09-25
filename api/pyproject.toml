@@ -56,3 +56,6 @@ addopts = "-ra --strict-markers"
 [tool.coverage.run]
 source = ["app"]
 branch = true
+# SQLAlchemy's async layer switches greenlets; without this, lines after an
+# await that went through the database are silently reported as missed.
+concurrency = ["greenlet", "thread"]

@@ -55,3 +55,16 @@ def test_if_match_rejects(header: str) -> None:
 def test_if_match_missing(header: str | None) -> None:
     with pytest.raises(PreconditionRequired):
         check_if_match(header, 3)
+
+
+def test_ingest_race_classifier() -> None:
+    from app.problems import Conflict, field_error
+    from app.services.ingest import _is_external_id_race
+
+    raced = Conflict("dup", errors=[field_error("external_id", "taken", type_="unique")])
+    assert _is_external_id_race(raced)
+    assert not _is_external_id_race(Conflict("other conflict"))
+    unique = IntegrityError("INSERT", {}, FakeDbapiError("23505", "uq_service_external"))
+    assert _is_external_id_race(unique)
+    other = IntegrityError("INSERT", {}, FakeDbapiError("23505", "uq_service_sha"))
+    assert not _is_external_id_race(other)
