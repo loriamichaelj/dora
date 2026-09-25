@@ -5,11 +5,13 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
+from fastapi import FastAPI
 from httpx import AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 from structlog.testing import capture_logs
 
+from app.repositories import commits as commits_repo
 from tests.integration.helpers import assert_problem, create_service, error_fields
 
 T0 = datetime(2026, 9, 20, 10, 0, tzinfo=UTC)
@@ -331,9 +333,39 @@ async def test_delete(api: AsyncClient, service_id: str) -> None:
     assert (await api.delete(url, headers={"If-Match": '"1"'})).status_code == 204
     assert_problem(await api.get(url), 404)
 
-    # The commit itself outlives the deployment, so the service still can't be deleted.
+
+async def test_commit_classification_follows_links(
+    api: AsyncClient, service_id: str, api_app: FastAPI
+) -> None:
+    """A commit is a deployment commit while any deployment ships it."""
+    shared = [commit("1111111"), commit("2222222")]
+    first = (await post_deployment(api, service_id, commits=shared)).json()
+    second = (
+        await post_deployment(
+            api,
+            service_id,
+            started_at=iso(T0 + timedelta(days=1)),
+            finished_at=iso(T0 + timedelta(days=1)),
+            commits=[commit("2222222")],
+        )
+    ).json()
+
+    async def classify() -> tuple[int, int]:
+        async with api_app.state.sessionmaker() as session:
+            c = await commits_repo.classify_for_service(session, uuid.UUID(service_id))
+        return c.deployment_commits, c.non_deployment_commits
+
+    assert await classify() == (2, 0)
+    await api.delete(f"{URL}/{first['id']}", headers={"If-Match": '"1"'})
+    assert await classify() == (1, 1)  # 2222222 is still shipped by the second deployment
+
+    blocked = await api.delete(f"/api/v1/services/{service_id}", headers={"If-Match": '"1"'})
+    assert "1 deployment commit(s)" in assert_problem(blocked, 409)["detail"]
+
+    await api.delete(f"{URL}/{second['id']}", headers={"If-Match": '"1"'})
+    assert await classify() == (0, 2)
     resp = await api.delete(f"/api/v1/services/{service_id}", headers={"If-Match": '"1"'})
-    assert_problem(resp, 409)
+    assert resp.status_code == 204
 
 
 async def test_delete_with_failures_is_409(api: AsyncClient, service_id: str) -> None:

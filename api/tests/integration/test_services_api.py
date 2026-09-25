@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from tests.integration.helpers import (
@@ -233,14 +234,24 @@ async def test_delete_flow(api: AsyncClient) -> None:
     assert_problem(await api.delete(url, headers={"If-Match": '"1"'}), 404)
 
 
-async def test_delete_with_deployments_or_commits_is_409(
-    api: AsyncClient, app_engine: AsyncEngine
-) -> None:
-    with_deploy = (await create_service(api, "with-deploy"))["id"]
-    await insert_deployment(app_engine, with_deploy, started_at=T0, finished_at=T0)
-    with_commit = (await create_service(api, "with-commit"))["id"]
-    await insert_commit(app_engine, with_commit, "abc1234", T0)
+async def test_delete_with_deployments_is_409(api: AsyncClient, app_engine: AsyncEngine) -> None:
+    sid = (await create_service(api, "with-deploy"))["id"]
+    await insert_deployment(app_engine, sid, started_at=T0, finished_at=T0)
+    resp = await api.delete(f"/api/v1/services/{sid}", headers={"If-Match": '"1"'})
+    body = assert_problem(resp, 409, slug="conflict")
+    assert "1 deployment(s)" in body["detail"]
 
-    for sid in (with_deploy, with_commit):
-        resp = await api.delete(f"/api/v1/services/{sid}", headers={"If-Match": '"1"'})
-        assert_problem(resp, 409, slug="conflict")
+
+async def test_non_deployment_commits_do_not_block_delete(
+    api: AsyncClient, app_engine: AsyncEngine, owner_engine: AsyncEngine
+) -> None:
+    sid = (await create_service(api, "with-commit"))["id"]
+    await insert_commit(app_engine, sid, "abc1234", T0)  # no deployment ships it
+    keep = (await create_service(api, "bystander"))["id"]
+    await insert_commit(app_engine, keep, "abc1234", T0)
+
+    resp = await api.delete(f"/api/v1/services/{sid}", headers={"If-Match": '"1"'})
+    assert resp.status_code == 204
+    async with owner_engine.connect() as conn:
+        remaining = await conn.scalar(text("SELECT count(*) FROM dora.commits"))
+    assert remaining == 1  # only the other service's commit is left

@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Author** | M.L. |
-| **Status** | In build v0.7 (BOOO M3 complete) |
+| **Status** | In build v0.8 (BOOO M3 complete) |
 | **Date** | 2026-09-25 |
 | **Scope** | Phase A — full stack running end-to-end and tested on localhost via Docker Compose |
 | **Out of scope** | Phase B (AWS, IaC, GitHub Actions CI/CD, container orchestration, SSO) |
@@ -19,6 +19,7 @@
 | v0.5 | M1 decisions (D21–D25): bootstrap grants run as `dora_owner` and give a non-superuser caller `SET`-only membership (found by the RDS-style bootstrap test); Alembic connects with `search_path=pg_catalog`; all constraints explicitly named; `db` healthcheck over TCP; PostgreSQL 18 volume path; separate `DatabaseSettings` for one-shot processes. |
 | v0.6 | M2 decisions (D26–D31): problem `type` URIs and the `errors[]` item shape; `If-Match` accepts `*` and lists; row locks make the version check atomic; failure `deployment_id` is patchable and revalidated; failure responses carry `service_id`; services commit explicitly. Default sorts and extra length limits documented in §7.3 and §7.5. |
 | v0.7 | M3 decisions (D32–D37): `in_progress` must not carry `finished_at`; SHAs normalized to lowercase; commit upsert keeps the whole first-written row; `PATCH /deployments` accepts additive `commits[]`; `finished_at` can't move past a linked failure; list/detail shapes and sort order. |
+| v0.8 | Commits are classified as **deployment commits** (shipped by ≥1 deployment) or **non-deployment commits** (D38). Deleting a service is blocked only by deployments; its non-deployment commits are deleted with it. |
 
 ---
 
@@ -254,7 +255,8 @@ CREATE INDEX ix_failures_deployment ON dora.failures (deployment_id);
 - A failure may only reference a **live** deployment, and its `detected_at` must be ≥ that deployment's `finished_at`.
 - **Immutable after create:** `services.slug`; `deployments.service_id`, `environment`, and `external_id`; `commits.sha` and `commits.committed_at`. Sending a different value returns 422.
 - **Commit upsert:** if a commit is posted again with a **different** `committed_at`, the first write wins and a warning is logged with both values. The request still succeeds, because pipelines should not fail over this.
-- Deleting a service that has deployments or commits returns 409. Deleting a deployment that has failures returns 409.
+- **Commit classification (D38):** a commit is a **deployment commit** while at least one deployment links it through `deployment_commits`, and a **non-deployment commit** otherwise, for example after the only deployment that shipped it was deleted. The classification is derived from the links on every read and never stored, so it can't drift.
+- Deleting a service that has deployments returns 409, and the detail counts its deployment commits. A service with no deployments can be deleted; its non-deployment commits, which no metric reads, are deleted with it in the same transaction. Deleting a deployment that has failures returns 409. Deleting a deployment keeps its commits; any it alone shipped become non-deployment commits.
 - `updated_at` and `version` are bumped by the application on every **effective** change. A no-op update does not bump them.
 - Map constraint violations (`UNIQUE`, `CHECK`, `FK`) to problem+json responses in one exception handler, as a backstop.
 
@@ -322,7 +324,7 @@ Log these four endpoints at DEBUG only.
 | POST | `/services` | 201 + `Location` + `ETag`; 409 on duplicate slug |
 | GET | `/services/{id}` | 404 if missing; `ETag` |
 | PATCH | `/services/{id}` | partial update; `slug` is immutable |
-| DELETE | `/services/{id}` | 204; 409 if it has deployments or commits |
+| DELETE | `/services/{id}` | 204, also deleting the service's non-deployment commits; 409 if it has deployments (D38) |
 
 ### 7.4 Deployments
 
@@ -845,6 +847,7 @@ If both pass, it posts `succeeded` with `finished_at = now`. If either fails, it
 | D35 | `PATCH /deployments/{id}` accepts additive `commits[]`; newly linked commits count as an effective change and bump `version` | Ingest updates (§7.6) must be able to add commits to an existing deployment through the same service code; the detail representation changes, so the ETag must too | Commits only at create time |
 | D36 | Moving a live deployment's `finished_at` later than a linked failure's `detected_at` is a 409 | Preserves the §6.3 rule that a failure is detected at or after its deployment finished | Re-checking only on failure writes |
 | D37 | Deployment list items omit `commits`/`failures`; detail orders commits newest first and failures by `detected_at`; `finished_at` sorts put unfinished rows last | Keeps list pages small; the detail view reads naturally | Nested arrays in every list item |
+| D38 | Commits are classified as deployment commits or non-deployment commits, derived from `deployment_commits`. Only deployments (and so their deployment commits) block deleting a service; non-deployment commits are deleted with it | Commits have no delete API, so under the original rule a service became undeletable once any deployment with commits was deleted. Non-deployment commits feed no metric. Deriving the class avoids a flag that could drift from the links. The service row lock blocks a concurrent deployment insert (its FK check needs a key-share lock), so no commit can be linked mid-delete | Keeping the original rule (service undeletable); a commits delete API; a stored `is_deployed` flag; deleting orphaned commits eagerly on deployment delete |
 
 ---
 

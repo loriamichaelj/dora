@@ -2,15 +2,19 @@
 
 import uuid
 
+import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.concurrency import check_if_match
 from app.models import Service
 from app.problems import Conflict, NotFound, Unprocessable, field_error
+from app.repositories import commits as commits_repo
 from app.repositories import services as repo
 from app.schemas.common import parse_sort
 from app.schemas.services import ServiceCreate, ServiceUpdate
 from app.services.common import apply_changes, save_changes
+
+log = structlog.get_logger(__name__)
 
 SORT_FIELDS = tuple(repo.SORT_COLUMNS)
 
@@ -83,9 +87,16 @@ async def delete(session: AsyncSession, service_id: uuid.UUID, if_match: str | N
     if service is None:
         raise NotFound(f"No service with id {service_id}.")
     check_if_match(if_match, service.version)
-    if await repo.has_dependents(session, service_id):
+    deployments = await repo.count_deployments(session, service_id)
+    if deployments:
+        commits = await commits_repo.classify_for_service(session, service_id)
         raise Conflict(
-            f"Service {service.slug!r} has deployments or commits and cannot be deleted."
+            f"Service {service.slug!r} has {deployments} deployment(s) shipping "
+            f"{commits.deployment_commits} deployment commit(s); delete the deployments first."
         )
+    # With no deployments left, every remaining commit is a non-deployment
+    # commit: nothing ships it and no metric reads it, so it goes with the service.
+    removed = await commits_repo.delete_non_deployment_commits(session, service_id)
     await session.delete(service)
     await session.commit()
+    log.info("service_deleted", slug=service.slug, non_deployment_commits_removed=removed)

@@ -2,7 +2,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import delete, exists, func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -77,3 +77,37 @@ async def for_deployment(session: AsyncSession, deployment_id: uuid.UUID) -> lis
         .order_by(Commit.committed_at.desc(), Commit.sha)
     )
     return list(await session.scalars(stmt))
+
+
+# A commit is a *deployment commit* when at least one deployment ships it, and
+# a *non-deployment commit* otherwise (for example, after the only deployment
+# that shipped it was deleted). Derived from deployment_commits on every call,
+# so the classification can never drift from the links.
+_is_linked = exists().where(deployment_commits.c.commit_id == Commit.id)
+
+
+@dataclass(frozen=True)
+class CommitClassification:
+    deployment_commits: int
+    non_deployment_commits: int
+
+
+async def classify_for_service(
+    session: AsyncSession, service_id: uuid.UUID
+) -> CommitClassification:
+    row = (
+        await session.execute(
+            select(
+                func.count().filter(_is_linked),
+                func.count().filter(~_is_linked),
+            ).where(Commit.service_id == service_id)
+        )
+    ).one()
+    return CommitClassification(deployment_commits=row[0], non_deployment_commits=row[1])
+
+
+async def delete_non_deployment_commits(session: AsyncSession, service_id: uuid.UUID) -> int:
+    result = await session.execute(
+        delete(Commit).where(Commit.service_id == service_id, ~_is_linked).returning(Commit.id)
+    )
+    return len(result.all())

@@ -1,9 +1,9 @@
 import uuid
 
-from sqlalchemy import exists, or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Commit, Deployment, Service
+from app.models import Deployment, Service
 from app.repositories.base import escape_like, paginate
 
 SORT_COLUMNS = {"name": Service.name, "created_at": Service.created_at}
@@ -44,7 +44,8 @@ async def list_page(
     return [row[0] for row in rows], total
 
 
-async def has_dependents(session: AsyncSession, service_id: uuid.UUID) -> bool:
-    deployments = exists().where(Deployment.service_id == service_id)
-    commits = exists().where(Commit.service_id == service_id)
-    return bool(await session.scalar(select(or_(deployments, commits))))
+async def count_deployments(session: AsyncSession, service_id: uuid.UUID) -> int:
+    count = await session.scalar(
+        select(func.count()).select_from(Deployment).where(Deployment.service_id == service_id)
+    )
+    return int(count or 0)
