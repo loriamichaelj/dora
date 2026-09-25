@@ -28,10 +28,18 @@ test('filters round-trip through the URL, omitting defaults', () => {
   expect(writeFilters(readFilters(new URLSearchParams())).toString()).toBe('');
 });
 
-test('presets end at the current minute', () => {
+test('presets end at the end of the current minute, so just-finished work counts', () => {
   const result = resolveWindow(readFilters(new URLSearchParams('window=7')), NOW);
   expect(result).toEqual({
-    window: { from: '2026-09-18T12:34:00.000Z', to: '2026-09-25T12:34:00.000Z' },
+    window: { from: '2026-09-18T12:35:00.000Z', to: '2026-09-25T12:35:00.000Z' },
+  });
+  // Exactly on a minute boundary, that minute is still included.
+  const onBoundary = resolveWindow(
+    readFilters(new URLSearchParams('window=7')),
+    new Date('2026-09-25T12:34:00.000Z'),
+  );
+  expect(onBoundary).toEqual({
+    window: { from: '2026-09-18T12:35:00.000Z', to: '2026-09-25T12:35:00.000Z' },
   });
 });
 

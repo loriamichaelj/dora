@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Author** | M.L. |
-| **Status** | In build v0.13 (BOOO M8 complete) |
+| **Status** | In build v0.14 (BOOO M9 complete) |
 | **Date** | 2026-09-25 |
 | **Scope** | Phase A — full stack running end-to-end and tested on localhost via Docker Compose |
 | **Out of scope** | Phase B (AWS, IaC, GitHub Actions CI/CD, container orchestration, SSO) |
@@ -25,6 +25,7 @@
 | v0.11 | M6 decisions (D49–D54): readiness probe is waited on, never cancelled; asyncpg connect and command timeouts; DB-unreachable errors are 503; unhandled errors become a problem+json 500 in middleware; route labels rebuilt from the route pattern; inbound request IDs validated. `/readyz` body shape and log field rules documented in §7.2 and §13. |
 | v0.12 | M7 decisions (D55–D58): deterministic, repeatable seeding via COPY; lead-time query restructured to meet the performance target (852 → 272 ms p95); error diffusion in the seed and scenario 9 read over the seed window; host scripts target Python 3.10+. |
 | v0.13 | M8 decisions (D59–D62): isolated codegen for the TypeScript 5 peer; the typed client and `ApiError`; URL-held dashboard filters; UTC bucket labels and fixed-unit axes. The dashboard renders the seeded bands and scenario 7's error state in a real browser. |
+| v0.14 | M9 decisions (D63–D65) and a revision of D61 (preset windows end at the end of the current minute). Services, Deployments, and Failures pages verified in a real browser, including E2E scenarios 5, 6, and 8. |
 
 ---
 
@@ -470,9 +471,12 @@ Query parameters: `service_id` (optional; omit for org-wide), `environment` (def
 
 **Cross-cutting requirements:**
 - One typed API client built on the generated OpenAPI types. There are no hand-written response types. Every failure becomes an `ApiError` carrying the problem body and `X-Request-ID`; network failures are status 0 (D60).
-- Dashboard filters live in the URL (`?service=&env=&window=7|30|90|custom&from=&to=`), so views can be bookmarked; defaults are omitted. Presets end at the current minute; custom ranges are local dates with an inclusive end date (D61).
+- Dashboard filters live in the URL (`?service=&env=&window=7|30|90|custom&from=&to=`), so views can be bookmarked; defaults are omitted. Presets end at the end of the current minute; custom ranges are local dates with an inclusive end date (D61).
 - Time-series bucket labels show the bucket's **UTC** calendar date, because buckets are UTC-defined; every other timestamp renders in local time. Chart axes use one fixed unit (hours, percent) while values and tooltips adapt (D62).
 - Each chart has a visually hidden data table with the same numbers. An empty window shows an empty state rather than cards full of zeros. Queries retry a 5xx up to twice, never a 4xx.
+- **Write errors, one policy (D63):** a 412 shows *"This record was changed by someone else"* in a toast with the request ID and reloads the record; server field errors appear inline on the matching input; anything else is a toast with the request ID. Forms validate with Zod first for fast feedback, but the API stays the source of truth.
+- **Dialogs** use the native `<dialog>` element, which supplies the focus trap, Escape, and an inert background (D64). The deployment page offers only §7.7's forward moves; completing an in-progress deployment sets `finished_at` to now (D65). `datetime-local` inputs are local wall time, sent to the API as UTC ISO strings.
+- Phase A has no delete buttons in the UI; the API's DELETE endpoints remain for scripts and cleanup.
 - Mutations send `If-Match: "<version>"`, using the `version` from the response body. On `412`, show "This record was changed by someone else" and refetch.
 - Render problem+json errors: field errors appear inline, and anything else appears in a toast showing the `X-Request-ID`.
 - Loading, empty, and error states exist for every data view.
@@ -905,8 +909,11 @@ If both pass, it posts `succeeded` with `finished_at = now`. If either fails, it
 | D58 | Host-side scripts (`scripts/*.py`) use only the standard library and stay compatible with Python 3.10 | They run on the host's `python3` without a virtualenv; this machine's is 3.10, which lacks `datetime.UTC`. The same constraint applies to `record_deploy.py` (§15.2) | Requiring 3.11+ or `uv run` for host scripts |
 | D59 | `openapi-typescript` runs from its own package (`web/tools/openapi`, pinned with TypeScript 5.9 and a lockfile); `openapi.json` and `schema.d.ts` are committed; `make openapi-check` compares the regenerated files with the index and flags untracked ones | Its only release line declares a TypeScript 5 peer, and the app uses TypeScript 6; npm `overrides` can't satisfy a peer. Isolation keeps both reproducible. Comparing with the index equals comparing with HEAD on a fresh CI checkout, without failing on staged work locally. A deliberate API change was used to prove the check fails | Downgrading the app to TypeScript 5; `--legacy-peer-deps`; running the generator unpinned via `npx` |
 | D60 | The client wraps `openapi-fetch`; `unwrap()` returns data plus ETag or throws `ApiError` (status, problem, request ID, `fieldErrors`, `isEditConflict`); `fetch` is looked up per call | One place turns every failure into something the UI can show, including non-JSON 502s and network errors. `openapi-fetch` captures `globalThis.fetch` at creation by default, which silently bypassed test stubs | Hand-written fetch wrappers; per-page error parsing |
-| D61 | Dashboard filters are URL query parameters; presets end at the current minute | Shareable, bookmarkable views; minute rounding keeps query keys stable, so re-renders don't refetch | Component state; `localStorage` |
+| D61 | Dashboard filters are URL query parameters; presets end at the **end** of the current minute (revised in M9) | Shareable, bookmarkable views; minute rounding keeps query keys stable, so re-renders don't refetch. M8 rounded down, which left a deployment recorded seconds ago out of every preset window until the next minute; the M9 browser walkthrough caught it | Component state; `localStorage`; rounding down |
 | D62 | Bucket labels render the UTC date; axes use fixed units; the web test suite runs with `TZ=America/Los_Angeles` | A UTC Monday bucket rendered in local time showed as Sunday west of UTC (seen in the first screenshot). Mixed axis units ("3.3 days" beside "40.0 h") misread. Pinning a western zone keeps the regression test meaningful on UTC CI machines; it was mutation-checked | Local-time labels everywhere; adaptive axis units |
+| D63 | One mutation-error handler: 412 → conflict toast plus refetch; field errors inline via `setError`; everything else → toast with the request ID | Every form behaves the same, and a user always has either a fix-this-field message or a request ID to report | Per-form error handling |
+| D64 | Dialogs use the native `<dialog>` with `showModal()` | Built-in focus trap, Escape, and inert background meet the keyboard-navigable requirement without a library | A custom modal with a focus-trap dependency |
+| D65 | The deployment page offers only the forward transitions (§7.7); completing an in-progress deployment sets `finished_at` to now; marking rolled back opens the "Record failure?" prompt, whose "Not now" records nothing | The UI can't produce a 409 by offering an invalid move; the prompt makes the rollback-vs-failure distinction (D4) explicit instead of silently inferring a failure | Showing all statuses in a dropdown; auto-creating a failure on rollback |
 
 ---
 
@@ -925,7 +932,7 @@ The build order of operations, referred to as **BOOO**. Work milestone by milest
 | M6 | `/readyz`, `/metrics`, structured logging, request/trace IDs, UTC session, SSL config | E2E scenario 7 works manually || ✅ done |
 | M7 | Seed generator (normal + `--large`) | `make seed` produces the §10 profiles; perf check recorded || ✅ done |
 | M8 | Frontend: API client + types, layout, Dashboard | dashboard renders seeded bands correctly || ✅ done |
-| M9 | Frontend: Services, Deployments, Failures pages; conflict handling | Vitest green | |
+| M9 | Frontend: Services, Deployments, Failures pages; conflict handling | Vitest green || ✅ done |
 | M10 | Playwright E2E in the isolated project, `compose.dev.yaml`, multi-arch build check, `make ci`, README | E2E green without touching dev data | |
 | M11 | **Self-tracking:** `scripts/record_deploy.py` + tests, `GIT_SHA` build-arg plumbing, `make up` auto-record, `make record-deploy` | §15 behaviors verified; **from this commit on, the tracker records its own builds**; §16 checklist complete | |
 

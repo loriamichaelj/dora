@@ -1,0 +1,33 @@
+.badge {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.good {
+  background: var(--band-elite-bg);
+  color: var(--band-elite-fg);
+}
+
+.info {
+  background: var(--band-high-bg);
+  color: var(--band-high-fg);
+}
+
+.warn {
+  background: var(--band-medium-bg);
+  color: var(--band-medium-fg);
+}
+
+.bad {
+  background: var(--band-low-bg);
+  color: var(--band-low-fg);
+}
+
+.neutral {
+  background: var(--band-none-bg);
+  color: var(--band-none-fg);
+}

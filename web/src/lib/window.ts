@@ -65,14 +65,15 @@ function localMidnight(isoDate: string): Date | null {
 
 /**
  * The [from, to) window to query, or an error message for a bad custom range.
- * Presets end at the current minute, so the query key is stable within it.
+ * Presets end at the *end* of the current minute: the query key is stable
+ * within the minute, and a deployment that finished seconds ago still counts.
  */
 export function resolveWindow(
   filters: DashboardFilters,
   now: Date = new Date(),
 ): { window: Window } | { error: string } {
   if (filters.preset !== 'custom') {
-    const end = new Date(Math.floor(now.getTime() / 60_000) * 60_000);
+    const end = new Date(Math.ceil((now.getTime() + 1) / 60_000) * 60_000);
     const start = new Date(end.getTime() - Number(filters.preset) * DAY_MS);
     return { window: { from: start.toISOString(), to: end.toISOString() } };
   }

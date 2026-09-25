@@ -140,3 +140,78 @@ export const TIMESERIES: Schemas['DoraTimeseries'] = {
     },
   ],
 };
+
+export const SERVICE_ID = '019f0000-0000-7000-8000-000000000001';
+export const DEPLOYMENT_ID = '019f0000-0000-7000-8000-0000000000d1';
+
+export function service(overrides: Partial<Schemas['ServiceOut']> = {}): Schemas['ServiceOut'] {
+  return {
+    id: SERVICE_ID,
+    slug: 'checkout-api',
+    name: 'Checkout API',
+    owner_team: 'payments',
+    repo_url: null,
+    version: 1,
+    created_at: '2026-09-01T00:00:00Z',
+    updated_at: '2026-09-01T00:00:00Z',
+    ...overrides,
+  };
+}
+
+export function deployment(
+  overrides: Partial<Schemas['DeploymentDetail']> = {},
+): Schemas['DeploymentDetail'] {
+  return {
+    id: DEPLOYMENT_ID,
+    service_id: SERVICE_ID,
+    environment: 'production',
+    kind: 'planned',
+    release: 'v1.4.2',
+    head_sha: '9f2c1ab',
+    status: 'succeeded',
+    started_at: '2026-09-20T10:00:00Z',
+    finished_at: '2026-09-20T10:07:30Z',
+    deployed_by: 'github-actions',
+    pipeline_url: null,
+    external_id: null,
+    version: 1,
+    created_at: '2026-09-20T10:00:00Z',
+    updated_at: '2026-09-20T10:07:30Z',
+    commits: [
+      {
+        id: '019f0000-0000-7000-8000-0000000000c1',
+        sha: '9f2c1ab0000000000000000000000000000000ab',
+        committed_at: '2026-09-19T20:00:00Z',
+        author: 'dev@example.com',
+        message: 'fix: retry on 503',
+      },
+    ],
+    failures: [],
+    ...overrides,
+  };
+}
+
+export function failure(overrides: Partial<Schemas['FailureOut']> = {}): Schemas['FailureOut'] {
+  return {
+    id: '019f0000-0000-7000-8000-0000000000f1',
+    deployment_id: DEPLOYMENT_ID,
+    service_id: SERVICE_ID,
+    severity: 'sev2',
+    summary: 'Checkout errors spiked',
+    detected_at: '2026-09-20T11:00:00Z',
+    resolved_at: null,
+    external_ref: null,
+    version: 1,
+    created_at: '2026-09-20T11:00:00Z',
+    updated_at: '2026-09-20T11:00:00Z',
+    ...overrides,
+  };
+}
+
+export function page<T>(items: T[], total = items.length) {
+  return { items, total, limit: 25, offset: 0 };
+}
+
+export async function bodyOf(request: Request): Promise<Record<string, unknown>> {
+  return (await request.clone().json()) as Record<string, unknown>;
+}

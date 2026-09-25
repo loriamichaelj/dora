@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { createBrowserRouter, RouterProvider } from 'react-router';
 
 import { createQueryClient } from './api/queries';
+import { ToastProvider } from './components/Toasts';
 import { routes } from './routes';
 
 export function App({ queryClient }: { queryClient?: QueryClient }) {
@@ -10,7 +11,9 @@ export function App({ queryClient }: { queryClient?: QueryClient }) {
   const [router] = useState(() => createBrowserRouter(routes));
   return (
     <QueryClientProvider client={client}>
-      <RouterProvider router={router} />
+      <ToastProvider>
+        <RouterProvider router={router} />
+      </ToastProvider>
     </QueryClientProvider>
   );
 }
