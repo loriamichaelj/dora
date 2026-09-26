@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Author** | M.L. |
-| **Status** | Draft v0.2, design only: nothing below is built or provisioned yet (§0). Open items 1–2 resolved |
+| **Status** | Draft v0.3, design only: nothing below is built or provisioned yet (§0). Open items 1–2 resolved. **Dev only: one ECS cluster** |
 | **Date** | 2026-09-25 |
 | **Depends on** | [`3T-APP-DESIGN.md`](3T-APP-DESIGN.md) v1.0. Phase A is complete: the app runs and is fully tested on localhost, and it meets the portability constraints in §14 of that document. |
 | **Reference** | Beacon, `~/Code/CloudDevOps/AWS/three-tier-app-ec2/beacon`, [`docs/CLOUD-DEVOPS-DESIGN.md`](https://github.com/loriamichaelj/beacon/blob/dev/docs/CLOUD-DEVOPS-DESIGN.md). Dora follows Beacon's branch, workflow, bootstrap, state, and IAM patterns. The difference is compute: **ECS on Fargate** instead of EC2 instances, an AMI, and S3 tarballs. |
@@ -17,6 +17,7 @@
 | Area | State |
 |---|---|
 | Branches and protection (§3) | ✅ Done in Phase A setup: `main`, `dev`, `stage`, `prod`; `main`, `stage`, and `prod` accept changes only through pull requests |
+| Scope | **Dev only.** One ECS cluster (`loria-dora-dev`); no stage or prod clusters, databases, load balancers, or subnets. Stage and prod appear in this design so adding them later is configuration, not redesign |
 | This design | 📝 Draft for review |
 | Everything else | ⏳ Not started. The build order is in §10 |
 
@@ -292,7 +293,7 @@ flowchart TB
 | prod | `10.1.4.0/24`, `10.1.5.0/24` | `10.1.14.0/24`, `10.1.15.0/24` |
 | shared (endpoints) | — | `10.1.20.0/24`, `10.1.21.0/24` |
 
-All subnets exist from the first network apply (they're free); only dev uses its own.
+Only the **dev** and **shared** subnets are created. The stage and prod ranges are reserved in the plan above but not created until those environments are, if ever.
 
 **No NAT gateway.** Private subnets have no route to the internet. Fargate tasks reach AWS only through VPC endpoints, which is also everything a Fargate task needs (platform 1.4+):
 
@@ -322,7 +323,7 @@ The VPC is shared across environments, so **security groups are the isolation bo
 
 ### 6.4 Compute: ECS on Fargate
 
-**One cluster per environment**, `loria-dora-<env>`. Clusters are free, and a per-environment cluster makes IAM scoping simple (`ecs:cluster` conditions).
+**One ECS cluster, `loria-dora-dev`.** Only dev is deployed, so dev's cluster is the only one created. If stage or prod are ever added, each gets its own cluster, `loria-dora-<env>`, which keeps IAM scoping simple (`ecs:cluster` conditions). The design is written per environment so that's a `.tfvars` file, not a redesign.
 
 **One service, one task shape.** Each task of `loria-dora-<env>-app` runs both containers, sharing the task's network namespace:
 
@@ -611,4 +612,4 @@ Each milestone ends working, with its checks passing. Workflow changes go throug
 | C11 | State in `loria-dora-tfstate-<account-id>`, created by `ensure-state-bucket.sh` before `terraform init` and then imported by bootstrap; S3-native locking | Terraform can't create its own state bucket; Beacon's proven pattern | Local state; DynamoDB locking (deprecated) |
 | C12 | Release `version` is a hash of the `api/`, `web/`, and `db/` Git trees | Survives promotion merges; infra- and docs-only changes don't rebuild | Commit SHA |
 | C13 | The deploy pipeline self-records through `record_deploy.py` with `--best-effort` | Phase A §15.6: one code path; recording never breaks a deploy | Recording from inside the cluster |
-| C14 | Only dev is deployed; stage and prod are designed with roles, Environments, and protection, but not provisioned | Cost; every mechanism is proven in dev first, as Beacon did | Provisioning all three now |
+| C14 | **Only dev is built and deployed: one ECS cluster (`loria-dora-dev`), one database, one ALB, and only dev's and the shared subnets.** Stage and prod exist as GitHub Environments, deploy roles, and branch protection only, with no AWS infrastructure | Cost; every mechanism is proven in dev first, as Beacon did | Provisioning all three now |
