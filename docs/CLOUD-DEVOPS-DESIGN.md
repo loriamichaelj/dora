@@ -45,7 +45,7 @@ These carry over from Beacon unchanged. When a decision comes up that this docum
 
 | Branch | Holds | Protection |
 |---|---|---|
-| `main` | **Only** GitHub Actions workflows (`.github/workflows/`) and composite actions (`.github/actions/`). Never application code, Terraform, or environment config. Default branch on GitHub. | PR required (ruleset `protected-branches`). The required status check **Lint workflows** is added once `ci.yml` exists (§10, B1). |
+| `main` | **Only** GitHub Actions workflows (`.github/workflows/`) and composite actions (`.github/actions/`). Never application code, Terraform, or environment config. Default branch on GitHub. | PR required (ruleset `protected-branches`). The status check **Lint workflows** is required by a second ruleset, `main-required-checks`, that targets `main` alone: `protected-branches` also covers `stage` and `prod`, where that check never runs. |
 | `dev` | Application code, Terraform (`infra/`), deploy scripts (`scripts/deploy/`), ECS task-definition templates (`deploy/ecs/`), environment config (`infra/env/environments/*.tfvars`), and the trigger stubs (§3.4). The working branch. | None; direct pushes allowed. |
 | `stage` | What was promoted from `dev` by PR. | PR required; no direct push, no force push, no deletion. |
 | `prod` | What was promoted from `stage` by PR. | Same as `stage`. |
@@ -563,7 +563,7 @@ Each milestone ends working, with its checks passing. Workflow changes go throug
 | # | Milestone | Done when | Manual steps |
 |---|---|---|---|
 | **B0** | This design, reviewed | Approved; open items 1–2 answered ✅ | Review |
-| **B1** | Workflow foundation: `ci.yml` (actionlint), `test.yml` (`make ci`), the `dev-ci.yml` stub | A push to `dev` runs the test suite on GitHub; **Lint workflows** is required on `main` | — |
+| **B1** | Workflow foundation: `ci.yml` (actionlint), `test.yml` (`make ci`), the `dev-ci.yml` stub | A push to `dev` runs the test suite on GitHub; **Lint workflows** is required on `main` (ruleset `main-required-checks`) ✅ | — |
 | **B2** | Bootstrap: `infra/project.env`, `infra/bootstrap/` (state bucket import, ECR repositories, deploy roles, task boundary), `ensure-state-bucket.sh`, `bootstrap.yml`, and the manual JSON with its README | `bootstrap.yml apply` succeeds twice (the second is a no-op); state is in S3 | **Yes**: bootstrap role, `bootstrap` Environment, then the other four Environments (§5.2) |
 | **B3** | Network: `infra/network/`, `terraform.yml` (`target=network`) | VPC, subnets, and endpoints applied through the `shared` Environment | Approve in `shared` |
 | **B4** | Phase A changes (§8): CA bundle, `dbinit` image, `deploy/ecs/` templates, `scripts/deploy/` with tests | `make ci` green; scripts tested against a stubbed AWS CLI | — |
