@@ -1,0 +1,184 @@
+name: terraform
+run-name: terraform ${{ inputs.action }} ${{ inputs.target }}${{ inputs.target == 'infra' && format(' {0}', inputs.environment) || '' }} (${{ inputs.ref }})
+
+# Plan / apply / destroy for the Terraform roots (docs/CLOUD-DEVOPS-DESIGN.md §4.4):
+#   target=network  infra/network  env:/shared/network.tfstate      Environment: shared
+#   target=infra    infra/env      env:/<environment>/infra.tfstate Environment: <environment>
+# The environment input only applies to target=infra. infra/bootstrap has its
+# own workflow, bootstrap.yml.
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "plan shows changes; apply makes them; destroy tears down"
+        type: choice
+        options: [plan, apply, destroy]
+        default: plan
+      target:
+        description: "Terraform root"
+        type: choice
+        options: [network, infra]
+        default: network
+      environment:
+        description: "Target environment (target=infra only)"
+        type: choice
+        options: [dev, stage, prod]
+        default: dev
+      ref:
+        description: "Branch whose infra/ code to run"
+        type: string
+        default: dev
+
+permissions:
+  contents: read
+  id-token: write
+
+# One run at a time per state file; queued runs wait instead of cancelling.
+concurrency:
+  group: terraform-${{ inputs.target == 'infra' && inputs.environment || inputs.target }}
+  cancel-in-progress: false
+
+env:
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+
+jobs:
+  terraform:
+    name: ${{ inputs.action }} ${{ inputs.target }}${{ inputs.target == 'infra' && format(' {0}', inputs.environment) || '' }}
+    runs-on: ubuntu-24.04
+    # Picks the deploy role (AWS_ROLE_ARN) and the reviewer gate.
+    environment: ${{ inputs.target == 'infra' && inputs.environment || 'shared' }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        # Explicit bash gets -o pipefail, so `terraform plan | tee` fails when plan fails.
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      # Exports every KEY=value in infra/project.env as KEY and TF_VAR_<key>.
+      - name: Load project config
+        run: |
+          while IFS='=' read -r key value; do
+            case "${key}" in ''|'#'*) continue ;; esac
+            lower="$(printf '%s' "${key}" | tr '[:upper:]' '[:lower:]')"
+            echo "${key}=${value}" >> "$GITHUB_ENV"
+            echo "TF_VAR_${lower}=${value}" >> "$GITHUB_ENV"
+          done < infra/project.env
+
+      # Design §4.4: a missing root or .tfvars (stage and prod, for now) fails
+      # here, with a clear message, before any AWS access.
+      - name: Resolve target
+        env:
+          TARGET: ${{ inputs.target }}
+          ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          case "${TARGET}" in
+            network) dir=infra/network; key="env:/shared/network.tfstate"; var_file="" ;;
+            infra)   dir=infra/env;     key="env:/${ENVIRONMENT}/infra.tfstate"
+                     var_file="environments/${ENVIRONMENT}.tfvars"
+                     echo "TF_VAR_environment=${ENVIRONMENT}" >> "$GITHUB_ENV" ;;
+            *) echo "::error::Unknown target '${TARGET}'"; exit 1 ;;
+          esac
+          if [ ! -d "${dir}" ]; then
+            echo "::error::${dir} doesn't exist on this ref; nothing to run for target=${TARGET}."
+            exit 1
+          fi
+          if [ -n "${var_file}" ] && [ ! -f "${dir}/${var_file}" ]; then
+            echo "::error::${dir}/${var_file} is missing; ${ENVIRONMENT} isn't provisioned (design C14)."
+            exit 1
+          fi
+          {
+            echo "TF_DIR=${dir}"
+            echo "STATE_KEY=${key}"
+            echo "VAR_FILE=${var_file}"
+          } >> "$GITHUB_ENV"
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.16.4
+          terraform_wrapper: false
+
+      - name: Terraform fmt
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform fmt -check -diff
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: terraform-${{ github.run_id }}
+          # Public repo: keep the account ID out of the logs.
+          mask-aws-account-id: true
+
+      - name: Locate state bucket
+        run: |
+          account_id="$(aws sts get-caller-identity --query Account --output text)"
+          bucket="${NAME_PREFIX}-tfstate-${account_id}"
+          if ! aws s3api head-bucket --bucket "${bucket}" >/dev/null 2>&1; then
+            echo "::error::State bucket ${bucket} not found or not accessible. Run the bootstrap workflow first."
+            exit 1
+          fi
+          {
+            echo "STATE_BUCKET=${bucket}"
+            echo "TF_VAR_state_bucket=${bucket}"
+          } >> "$GITHUB_ENV"
+
+      - name: Terraform init
+        working-directory: ${{ env.TF_DIR }}
+        run: |
+          terraform init -lockfile=readonly \
+            -backend-config="bucket=${STATE_BUCKET}" \
+            -backend-config="key=${STATE_KEY}" \
+            -backend-config="region=${AWS_REGION}"
+
+      # Design §4.4: fail rather than plan against the wrong state key or the
+      # wrong environment's variables.
+      - name: Verify backend key and inputs
+        working-directory: ${{ env.TF_DIR }}
+        env:
+          TARGET: ${{ inputs.target }}
+          ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          key="$(jq -r '.backend.config.key' .terraform/terraform.tfstate)"
+          if [ "${key}" != "${STATE_KEY}" ]; then
+            echo "::error::Backend key is '${key}', expected '${STATE_KEY}'"
+            exit 1
+          fi
+          if [ "${TARGET}" = "infra" ]; then
+            case "${key}" in
+              "env:/${ENVIRONMENT}/"*) ;;
+              *) echo "::error::State key '${key}' doesn't belong to environment '${ENVIRONMENT}'"; exit 1 ;;
+            esac
+            if [ "${VAR_FILE}" != "environments/${ENVIRONMENT}.tfvars" ]; then
+              echo "::error::Var file '${VAR_FILE}' doesn't match environment '${ENVIRONMENT}'"
+              exit 1
+            fi
+          fi
+          echo "OK: ${TARGET} -> ${key}${VAR_FILE:+ with ${VAR_FILE}}"
+
+      - name: Terraform validate
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform validate
+
+      - name: Terraform plan
+        working-directory: ${{ env.TF_DIR }}
+        env:
+          ACTION: ${{ inputs.action }}
+        run: |
+          args=(-out=tfplan -no-color)
+          [ "${ACTION}" = "destroy" ] && args+=(-destroy)
+          [ -n "${VAR_FILE}" ] && args+=("-var-file=${VAR_FILE}")
+          terraform plan "${args[@]}" | tee plan.txt
+          summary="$(grep -E '^(Plan:|No changes\.)' plan.txt | tail -1 || true)"
+          echo "### ${ACTION} ${STATE_KEY}" >> "$GITHUB_STEP_SUMMARY"
+          echo "${summary:-See the plan log.}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Terraform apply
+        if: inputs.action == 'apply' || inputs.action == 'destroy'
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform apply tfplan
