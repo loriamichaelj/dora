@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Author** | M.L. |
-| **Status** | v0.5: B0–B2 done; next is B3, the network (§0, §10). Open items 1–2 resolved. **Dev only: one ECS cluster** |
+| **Status** | v0.6: B0–B2 done; B3 built, awaiting its first `terraform.yml target=network` apply (§0, §10). Open items 1–2 resolved. **Dev only: one ECS cluster** |
 | **Date** | 2026-09-25 |
 | **Depends on** | [`3T-APP-DESIGN.md`](3T-APP-DESIGN.md) v1.0. Phase A is complete: the app runs and is fully tested on localhost, and it meets the portability constraints in §14 of that document. |
 | **Reference** | Beacon, `~/Code/CloudDevOps/AWS/three-tier-app-ec2/beacon`, [`docs/CLOUD-DEVOPS-DESIGN.md`](https://github.com/loriamichaelj/beacon/blob/dev/docs/CLOUD-DEVOPS-DESIGN.md). Dora follows Beacon's branch, workflow, bootstrap, state, and IAM patterns. The difference is compute: **ECS on Fargate** instead of EC2 instances, an AMI, and S3 tarballs. |
@@ -21,6 +21,7 @@
 | This design | ✅ Reviewed (B0) |
 | Workflows (B1) | ✅ `ci.yml` and `test.yml` on `main`; the `dev-ci.yml` stub on `dev` runs `make ci` on every push |
 | Bootstrap (B2) | ✅ Applied 2026-09-26: state bucket adopted, ECR repositories, task boundary, and the four deploy roles; the second apply was a no-op. All five Environments have their `AWS_ROLE_ARN` |
+| Network (B3) | 🔨 Built: `infra/network/` and `terraform.yml`. The first apply is next |
 | Everything else | ⏳ Not started. The build order is in §10 |
 
 ## 1. Summary
