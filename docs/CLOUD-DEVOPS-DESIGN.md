@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Author** | M.L. |
-| **Status** | v0.10: B0–B5 done; next is B6, the first dev deploy (§0, §10). Open items 1–2 resolved. **Dev only: one ECS cluster** |
+| **Status** | v0.11: B0–B5 done; B6 built, awaiting the first dev deploy (§0, §10). Open items 1–2 resolved. **Dev only: one ECS cluster** |
 | **Date** | 2026-09-25 |
 | **Depends on** | [`3T-APP-DESIGN.md`](3T-APP-DESIGN.md) v1.0. Phase A is complete: the app runs and is fully tested on localhost, and it meets the portability constraints in §14 of that document. |
 | **Reference** | Beacon, `~/Code/CloudDevOps/AWS/three-tier-app-ec2/beacon`, [`docs/CLOUD-DEVOPS-DESIGN.md`](https://github.com/loriamichaelj/beacon/blob/dev/docs/CLOUD-DEVOPS-DESIGN.md). Dora follows Beacon's branch, workflow, bootstrap, state, and IAM patterns. The difference is compute: **ECS on Fargate** instead of EC2 instances, an AMI, and S3 tarballs. |
@@ -24,6 +24,7 @@
 | Network (B3) | ✅ Applied 2026-09-26 through the `shared` Environment: the VPC, dev's and the shared subnets, the S3 gateway endpoint, and the four interface endpoints (23 resources). The first apply hit `VpcLimitExceeded`: the shared account's us-east-1 was at its quota of 5 VPCs, so an unused VPC was deleted first (§6.2) |
 | Phase A changes (B4) | ✅ 2026-09-26: the RDS CA bundle in the `api` image, the `dbinit` image, `deploy/ecs/` templates, `scripts/deploy/` with tests; `make ci` green (§8) |
 | Dev infrastructure (B5) | ✅ Applied 2026-09-26 as `deploy-dev` (34 resources; RDS took 9.5 minutes): the ALB, the `loria-dora-dev` cluster and the service at 0 tasks, RDS PostgreSQL 18.3, the secrets, the task roles, the log groups, and `deploy-config`. The ALB answers 503 until the first deploy |
+| First deploy (B6) | 🔨 Built: `deploy.yml`, the `pipeline-status` action, and the browser smoke test. The first dev deploy is next |
 | Everything else | ⏳ Not started. The build order is in §10 |
 
 ## 1. Summary
@@ -450,9 +451,9 @@ Merging `dev` into `stage` creates a new commit, but the same `api/`, `web/`, an
 
 Steps 1–3 run **only for dev**. Stage and prod never build.
 
-1. **Version** (§7.1). If ECR already has `api`, `web`, and `dbinit` images tagged with it, skip to step 4.
-2. **Test**: `test.yml` (`make ci`).
-3. **Build and push**: all three images for `linux/arm64` on an arm64 runner, with `APP_VERSION`, `GIT_SHA`, and `BUILD_TIME` build arguments. Pushed to ECR tagged with `version` and `sha-<commit>`.
+1. **Version** (§7.1).
+2. **Test**: `test.yml` (`make ci`), on every dev deploy, even when the images already exist: one definition of green.
+3. **Build and push**: each image not already in ECR for this `version`, for `linux/arm64` on an arm64 runner (`ubuntu-24.04-arm`), with `APP_VERSION`, `GIT_SHA`, and `BUILD_TIME` build arguments. Pushed tagged with `version` and `sha-<commit>`, as a plain image manifest with no attestations, so ECR's untagged-image lifecycle rule can't expire part of a release. A docs- or infra-only commit builds nothing; a half-finished earlier push builds only what's missing. Scan findings are listed in the job summary.
 4. **Preflight** (§7.4): the environment's infrastructure exists, and the images for `version` exist in ECR. For stage, a missing image means "never deployed to dev" and fails with that message. For prod, `version` must equal stage's current `release-version`, so only exactly what's running in stage reaches prod.
 5. **Self-tracking, start**: `record_deploy.py --status in_progress` (§7.6).
 6. **Database bootstrap**: run the `db-bootstrap` task (§7.3). It's idempotent (Phase A D21), so it runs on every deploy. It creates the roles on the first deploy and changes nothing afterwards.
@@ -461,7 +462,7 @@ Steps 1–3 run **only for dev**. Stage and prod never build.
 9. **Publish** the pointer: write `version` to `/loria-dora/<env>/release-version`.
 10. **Smoke tests** against the ALB:
     - **curl:** `/readyz` (with warm-up retries), `/healthz`, `/version` returning this `GIT_SHA`, an API list call, the SPA and a client-side route, and `/metrics` not returning Prometheus output.
-    - **Headless browser:** the dashboard and management pages render with no console, page, or API errors. (Built with `deploy.yml` in B6, reusing the web app's Playwright; the curl checks are `scripts/deploy/smoke_test.py`, built in B4.)
+    - **Headless browser:** the dashboard and management pages render with no console, page, or API errors. (`web/e2e/deployed.smoke.ts` with `playwright.smoke.config.ts`, read-only, reusing the web app's Playwright; the curl checks are `scripts/deploy/smoke_test.py`. `make e2e` runs both against the local stack too.)
 11. **Self-tracking, finish**: `record_deploy.py --status auto` (§7.6).
 12. **Notify** (§4.5).
 

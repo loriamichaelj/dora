@@ -206,6 +206,9 @@ e2e: check-node web/node_modules/.package-lock.json e2e-browsers ## Playwright E
 			python3 scripts/deploy/smoke_test.py --base-url http://localhost:18080 \
 				--git-sha "$(GIT_SHA)" --ready-attempts 5 --ready-delay 2 || status=$$?; \
 		fi; \
+		if [ $$status -eq 0 ]; then \
+			(cd web && SMOKE_BASE_URL=http://localhost:18080 npm run --silent smoke) || status=$$?; \
+		fi; \
 		$(E2E_COMPOSE) down -v --remove-orphans; \
 		exit $$status
 
