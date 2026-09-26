@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Author** | M.L. |
-| **Status** | v0.8: B0–B4 done; next is B5, dev's infrastructure (§0, §10). Open items 1–2 resolved. **Dev only: one ECS cluster** |
+| **Status** | v0.9: B0–B4 done; B5 built, awaiting its first `terraform.yml target=infra` apply (§0, §10). Open items 1–2 resolved. **Dev only: one ECS cluster** |
 | **Date** | 2026-09-25 |
 | **Depends on** | [`3T-APP-DESIGN.md`](3T-APP-DESIGN.md) v1.0. Phase A is complete: the app runs and is fully tested on localhost, and it meets the portability constraints in §14 of that document. |
 | **Reference** | Beacon, `~/Code/CloudDevOps/AWS/three-tier-app-ec2/beacon`, [`docs/CLOUD-DEVOPS-DESIGN.md`](https://github.com/loriamichaelj/beacon/blob/dev/docs/CLOUD-DEVOPS-DESIGN.md). Dora follows Beacon's branch, workflow, bootstrap, state, and IAM patterns. The difference is compute: **ECS on Fargate** instead of EC2 instances, an AMI, and S3 tarballs. |
@@ -23,6 +23,7 @@
 | Bootstrap (B2) | ✅ Applied 2026-09-26: state bucket adopted, ECR repositories, task boundary, and the four deploy roles; the second apply was a no-op. All five Environments have their `AWS_ROLE_ARN` |
 | Network (B3) | ✅ Applied 2026-09-26 through the `shared` Environment: the VPC, dev's and the shared subnets, the S3 gateway endpoint, and the four interface endpoints (23 resources). The first apply hit `VpcLimitExceeded`: the shared account's us-east-1 was at its quota of 5 VPCs, so an unused VPC was deleted first (§6.2) |
 | Phase A changes (B4) | ✅ 2026-09-26: the RDS CA bundle in the `api` image, the `dbinit` image, `deploy/ecs/` templates, `scripts/deploy/` with tests; `make ci` green (§8) |
+| Dev infrastructure (B5) | 🔨 Built: `infra/env/` and `environments/dev.tfvars`. The first plan and apply are next |
 | Everything else | ⏳ Not started. The build order is in §10 |
 
 ## 1. Summary
@@ -600,7 +601,7 @@ Each milestone ends working, with its checks passing. Workflow changes go throug
 
 1. ~~**AWS account**~~: resolved 2026-09-25. **Same shared account as Beacon**: region `us-east-1`, the `cloudbatch818-` IAM prefix rule applies, and the GitHub OIDC provider already exists, so step 1 of §5.2 is skipped.
 2. ~~**Reviewer on the `dev` Environment**~~: resolved 2026-09-25. **None**, as in Beacon.
-3. **RDS PostgreSQL 18 minor version.** Pin the newest 18.x RDS offers when B5 is built. It must be 18 for `uuidv7()`.
+3. ~~**RDS PostgreSQL 18 minor version**~~: resolved in B5. `engine_version = "18"`: RDS picks its current 18.x and applies minor upgrades itself (`auto_minor_version_upgrade`), so there's no pinned minor to fall behind. The `db_engine_version` output records the actual version.
 4. **Dev cost options:** one-AZ endpoints and/or Fargate Spot (§9). The default here is neither.
 5. **Prod wait timer** on its Environment. Moot until prod exists.
 6. **Where each environment's deploys are recorded** once stage and prod exist: each environment's own tracker (this design), or one central tracker.

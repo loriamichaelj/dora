@@ -694,3 +694,11 @@ def test_run_aws_raises_with_the_error_code(monkeypatch: pytest.MonkeyPatch) -> 
     with pytest.raises(ed.AwsError) as info:
         ed.run_aws(["ssm", "get-parameter", "--name", "x"])
     assert info.value.code == "ParameterNotFound"
+
+
+def test_infra_publishes_exactly_the_deploy_config_keys_the_scripts_need() -> None:
+    main_tf = (REPO_ROOT / "infra" / "env" / "main.tf").read_text()
+    block = main_tf.split('resource "aws_ssm_parameter" "deploy_config"', 1)[1]
+    body = block.split("jsonencode({", 1)[1].split("})", 1)[0]
+    published = re.findall(r"^\s*(\w+)\s*=", body, flags=re.MULTILINE)
+    assert sorted(published) == sorted(ed.CONFIG_KEYS)
