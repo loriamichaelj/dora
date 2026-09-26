@@ -16,6 +16,12 @@ SCHEMA_TS := web/src/api/schema.d.ts
 E2E_ENV := web/e2e/e2e.env
 E2E_COMPOSE := $(COMPOSE) -p dora-e2e --env-file $(E2E_ENV) -f compose.yaml
 
+# Host scripts are standard library only and must run on Python 3.10 (D58),
+# so their lint and tests run on exactly that version, outside the api venv.
+RUFF_VERSION := 0.16.9
+SCRIPTS_PY := uv run --no-project --python 3.10
+RECORD ?= 1
+
 # Build info, captured once at parse time (before any build starts) and
 # passed to `docker compose build` through build.args interpolation.
 ifeq ($(origin GIT_SHA), undefined)
@@ -33,6 +39,7 @@ endif
 export GIT_SHA BUILD_TIME APP_VERSION DEPLOY_STARTED_AT
 
 .PHONY: help up down reset logs migrate migration seed seed-large analyze perf lint lint-api \
+        lint-scripts test-scripts record-deploy \
         lint-web fmt test test-api test-web e2e e2e-browsers openapi openapi-check ci \
         build-multiarch dev check-env check-node
 
@@ -41,8 +48,14 @@ help: ## List targets
 
 # ---- stack ----
 
-up: check-env ## Build and start the stack, wait until web is healthy
+up: check-env ## Build and start the stack, then record the build (RECORD=0 to skip)
 	$(COMPOSE) up -d --build --wait web
+	@if [ "$(RECORD)" != "0" ]; then \
+		python3 scripts/record_deploy.py --best-effort --started-at "$(DEPLOY_STARTED_AT)"; \
+	fi
+
+record-deploy: ## Record the running build as a dora-tracker deployment (§15)
+	python3 scripts/record_deploy.py
 
 down: ## Stop the stack, keep data
 	$(COMPOSE) down
@@ -98,12 +111,16 @@ perf: ## Time the org-wide 90-day DORA summary (run after seed-large)
 
 # ---- quality ----
 
-lint: lint-api lint-web ## ruff, mypy, eslint, prettier, tsc
+lint: lint-api lint-web lint-scripts ## ruff, mypy, eslint, prettier, tsc
 
 lint-api:
 	cd api && $(UV) ruff check .
 	cd api && $(UV) ruff format --check .
 	cd api && $(UV) mypy
+
+lint-scripts:
+	cd scripts && uvx ruff@$(RUFF_VERSION) check .
+	cd scripts && uvx ruff@$(RUFF_VERSION) format --check .
 
 lint-web: check-node web/node_modules/.package-lock.json
 	cd web && npm run --silent lint
@@ -137,7 +154,12 @@ openapi-check: openapi ## Fail if the committed API contract is out of date
 
 # ---- tests ----
 
-test: test-api test-web e2e ## All test suites: api, web, then E2E
+test: test-api test-scripts test-web e2e ## All test suites: api, scripts, web, then E2E
+
+test-scripts: ## record_deploy.py tests on Python 3.10 -> reports/
+	@mkdir -p $(REPORTS)
+	$(SCRIPTS_PY) --with pytest==9.1.1 pytest scripts/tests -q -p no:cacheprovider \
+		--junitxml=$(REPORTS)/junit-scripts.xml
 
 test-api: ## pytest + coverage -> reports/
 	@mkdir -p $(REPORTS)

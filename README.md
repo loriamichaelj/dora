@@ -1,6 +1,6 @@
 # DORA Deployment Tracker
 
-A three-tier web app that records deployments, the commits they ship, and the production failures they cause, and computes the five DORA software delivery metrics from that data. Self-tracking of its own builds arrives in BOOO M11.
+A three-tier web app that records deployments, the commits they ship, and the production failures they cause, and computes the five DORA software delivery metrics from that data. It also records its own builds, through its own API.
 
 The design, every decision, and the build order (**BOOO**) live in [`docs/3T-APP-DESIGN.md`](docs/3T-APP-DESIGN.md). This README is the practical guide.
 
@@ -12,7 +12,7 @@ make up        # builds and starts everything; open http://localhost:8080
 make seed      # optional: 90 days of deterministic demo data for six services
 ```
 
-`make up` works from a cold start with no other steps: the database initializes, migrations run, and the API and web tier wait for each other's health checks.
+`make up` works from a cold start with no other steps: the database initializes, migrations run, and the API and web tier wait for each other's health checks. Then it records the build (see [Self-tracking](#self-tracking)).
 
 ### Requirements
 
@@ -54,7 +54,8 @@ Every target is non-interactive and exits non-zero on failure, so CI can call th
 
 | Target | What it does |
 |---|---|
-| `make up` | build and start the stack; wait until the web tier is healthy |
+| `make up` | build and start the stack, wait until it's healthy, then record the build (`RECORD=0` skips that) |
+| `make record-deploy` | record the running build as a `dora-tracker` deployment |
 | `make down` / `make reset` | stop (keeping data) / delete all data and start cold |
 | `make dev` | hot reload: API with `--reload`, Vite dev server on http://localhost:5173 |
 | `make logs` | follow all logs (JSON from the API) |
@@ -62,8 +63,8 @@ Every target is non-interactive and exits non-zero on failure, so CI can call th
 | `make migrate` / `make migration m="…"` | apply migrations / autogenerate a new revision |
 | `make lint` / `make fmt` | ruff, mypy, eslint, prettier, tsc / auto-format |
 | `make openapi` / `make openapi-check` | regenerate the API contract and TS types / fail if it drifted |
-| `make test` | API tests, web tests, then E2E |
-| `make test-api` / `make test-web` / `make e2e` | each suite on its own; reports go to `reports/` |
+| `make test` | API, script, and web tests, then E2E |
+| `make test-api` / `make test-scripts` / `make test-web` / `make e2e` | each suite on its own; reports go to `reports/` |
 | `make perf` | time the org-wide 90-day DORA summary (after `make seed-large`) |
 | `make build-multiarch` | build both images for `linux/amd64` and `linux/arm64` |
 | `make ci` | `lint`, `openapi-check`, `test`: the single entry point for CI |
@@ -90,11 +91,24 @@ A rollback is not a failure on its own: the UI asks whether to record one. An em
 
 Pipelines report deployments to `POST /api/v1/events/deployments` with an `X-API-Key`. The endpoint is idempotent on `(service, external_id)`, tolerates retries and out-of-order events, and never creates services by itself. See §7.6 of the design doc for the payload.
 
+## Self-tracking
+
+Every `make up` from a clean working tree records the build as a deployment of the `dora-tracker` service in the **development** environment, using [`scripts/record_deploy.py`](scripts/record_deploy.py) and the same ingest API any pipeline uses. Switch the dashboard's environment to *development* to see it.
+
+- The first recorded build (or the first after `make reset`) records only `HEAD`; later builds record the commits since the last recorded one. A rebuild of the same commit records a deployment with no new commits.
+- It records `succeeded` only if `/readyz` answers and `/version` reports exactly your `HEAD`; otherwise `failed`, so a stale container shows up as a failure rather than a false success.
+- A working tree with uncommitted changes isn't recorded (its build can't be reproduced from a SHA). `make up` just warns; `python3 scripts/record_deploy.py --allow-dirty` records it without commits.
+- Recording never fails `make up`. Rerunning it for the same build changes nothing.
+- These numbers mean "commit → running on my laptop": useful dogfooding, not a delivery-performance signal. In Phase B, the deploy pipeline runs the same script against real environments.
+
+`make e2e` runs in its own stack, so it never touches this history; `make reset` does erase it.
+
 ## Testing
 
 | Suite | Tool | Notes |
 |---|---|---|
 | API unit + integration | pytest against real PostgreSQL 18 (Testcontainers) | includes golden datasets A–C for the metrics engine; coverage ≥ 80% enforced |
+| Scripts | pytest with throwaway git repos and a fake API, on **Python 3.10** | `record_deploy.py`: commit ranges, dirty trees, status, idempotency, failures |
 | Web | Vitest + Testing Library | components, forms, error handling, conflicts; runs in a US Pacific time zone to catch UTC bugs |
 | E2E | Playwright | the ten scenarios in §12.4 of the design doc |
 

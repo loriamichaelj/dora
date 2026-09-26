@@ -38,7 +38,9 @@ def percentile(samples: list[float], pct: float) -> float:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[1])
-    parser.add_argument("--api-url", default=os.environ.get("DORA_API_URL", "http://localhost:8080"))
+    parser.add_argument(
+        "--api-url", default=os.environ.get("DORA_API_URL", "http://localhost:8080")
+    )
     parser.add_argument("--requests", type=int, default=50)
     parser.add_argument("--warmup", type=int, default=5)
     args = parser.parse_args()
@@ -65,8 +67,8 @@ def main() -> int:
         if name == "summary":
             summary_p95 = p95
             freq = body["deployment_frequency"]
-            assert isinstance(freq, dict)
-            extra = f"  counted_deployments={freq['count']}"
+            if isinstance(freq, dict):
+                extra = f"  counted_deployments={freq['count']}"
         print(
             f"{name:<10} n={len(samples)}  p50={statistics.median(samples):7.1f} ms  "
             f"p95={p95:7.1f} ms  max={max(samples):7.1f} ms{extra}"

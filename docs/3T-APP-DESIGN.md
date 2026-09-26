@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Author** | M.L. |
-| **Status** | In build v0.15 (BOOO M10 complete) |
+| **Status** | In build v0.16 (BOOO M11 complete) |
 | **Date** | 2026-09-25 |
 | **Scope** | Phase A — full stack running end-to-end and tested on localhost via Docker Compose |
 | **Out of scope** | Phase B (AWS, IaC, GitHub Actions CI/CD, container orchestration, SSO) |
@@ -27,6 +27,7 @@
 | v0.13 | M8 decisions (D59–D62): isolated codegen for the TypeScript 5 peer; the typed client and `ApiError`; URL-held dashboard filters; UTC bucket labels and fixed-unit axes. The dashboard renders the seeded bands and scenario 7's error state in a real browser. |
 | v0.14 | M9 decisions (D63–D65) and a revision of D61 (preset windows end at the end of the current minute). Services, Deployments, and Failures pages verified in a real browser, including E2E scenarios 5, 6, and 8. |
 | v0.15 | M10 decisions (D66–D70): isolated E2E stack with its own env file; scenario 10 pending M11; `compose.dev.yaml`; the multi-arch builder; `db` runs as `postgres`. §16 items ticked where verified; self-tracking remains for M11. |
+| v0.16 | M11 decisions (D71–D75): release label format; no-op reruns and side-effect-free dry runs; script lint and tests on Python 3.10; `--repo`; scenario 10 compares commit sets. All ten E2E scenarios pass. |
 
 ---
 
@@ -667,9 +668,9 @@ Layering rule: routers → services → repositories. Routers never touch the OR
 | Integration (API) | pytest + httpx + Testcontainers PG 18 | every endpoint: happy path, 404/409/412/422/428, pagination, filters, ingest idempotency and out-of-order handling, strong-ETag round trip, DORA SQL against the golden datasets | API line coverage ≥ 80% |
 | Migrations | pytest | `upgrade head` → `downgrade base` → `upgrade head` on an empty DB; `alembic check` shows no drift; `bootstrap.sql` run twice is a no-op | must pass |
 | Security | pytest | the `dora_app` role cannot run DDL; `/metrics` isn't reachable via nginx; the ingest endpoint rejects a missing or bad key | must pass |
-| Self-tracking script | pytest with temporary git repos + a stub HTTP server | commit-range selection (first run, normal, rebased history, dirty tree), payload shape, idempotent `external_id`, `/version` SHA mismatch → `failed`, API unreachable → exit 0 with a warning when `--best-effort` is set | must pass |
+| Self-tracking script | pytest with temporary git repos + a stub HTTP server, run on Python 3.10 (D73) | commit-range selection (first run, normal, rebased history, dirty tree), payload shape, idempotent `external_id`, `/version` SHA mismatch → `failed`, API unreachable → exit 0 with a warning when `--best-effort` is set | must pass |
 | Unit (web) | Vitest + Testing Library | metric cards (including null states and the null rework band), forms, If-Match / 412 handling | key components covered |
-| E2E | Playwright against the isolated Compose stack (`make e2e`) | §12.4, one worker, in order (scenario 7 stops the database); each test creates its own uniquely named service | all pass. Scenario 10 is `fixme` until M11 delivers `record_deploy.py` (D67) |
+| E2E | Playwright against the isolated Compose stack (`make e2e`) | §12.4, one worker, in order (scenario 7 stops the database); each test creates its own uniquely named service | all ten pass |
 | Performance (manual) | `make seed-large` then `make perf` | `/metrics/dora`, org-wide, 90-day window, 100k deployments: p95 < 500 ms locally | recorded in README. M7 result (Apple M2, OrbStack, 100,221 deployments, 87,882 counted): summary p95 **272 ms** (p50 250 ms), time series p95 330 ms; a cold first run measured p95 428 ms. Before D56 the summary p95 was 852 ms. |
 
 Tests run with no `.env` present: test configuration supplies its own values.
@@ -786,13 +787,16 @@ The tracker records **its own builds** as deployments of the service `dora-track
 | `--started-at` | `DEPLOY_STARTED_AT` | now | ISO 8601, captured by the Makefile **before** the build starts |
 | `--external-id` | | `local-<sha12>-<build_time_epoch>` | idempotency key. `build_time` is read from `/version`, so the key identifies the **running build**: re-running the script for the same build is a no-op, while every rebuild gets a new key. Phase B passes `gha-<run_id>-<run_attempt>-<env>`. |
 | `--kind` | | `planned` | `remediation` for hotfixes |
-| `--release` | `APP_VERSION` | `0.0.0+<sha12>` | release label |
+| `--release` | | `<APP_VERSION or 0.0.0>+<sha12>` | release label. Suffixes are dot-separated build metadata: `.dirty`, `.sha-mismatch`, `.not-ready`, `.unreachable` (D71) |
+| `--repo` | | current directory | the git checkout to record; E2E points it at a throwaway clone (D74) |
 | `--ensure-service` | | on locally | create `dora-tracker` via `POST /api/v1/services` if missing |
 | `--allow-dirty` | | off | see §15.3 |
 | `--best-effort` | | on when called from `make up` | on any error, print a warning and exit 0 |
-| `--dry-run` | | off | print the payload and exit without sending |
+| `--dry-run` | | off | print the payload and exit without sending; never writes, so it doesn't create the service either (D72) |
 
 Exit codes: `0` for success (or any failure under `--best-effort`), `1` for an API or network error, `2` for bad usage, and `3` when refusing a dirty tree.
+
+Configuration is read from the environment first, then from `.env` in the current directory or the repository. A run whose `external_id` matches the last recorded `succeeded` deployment prints "already recorded" and sends nothing (D72). An explicit `--status` skips the §15.4 checks.
 
 ### 15.3 Commit range selection
 
@@ -923,6 +927,11 @@ If both pass, it posts `succeeded` with `finished_at = now`. If either fails, it
 | D68 | `compose.dev.yaml` bind-mounts `api/app` read-only for `--reload`, and runs Vite from the stock Node 24 image with `node_modules` in a named volume, as root | Hot reload without rebuilding images; macOS and Linux `node_modules` never mix. Root is confined to the dev-only helper container | A separate dev Dockerfile; a host-mounted `node_modules` |
 | D69 | `make build-multiarch` uses a dedicated `docker-container` buildx builder with `--output type=cacheonly`, outside `make ci` | The default `docker` driver can't build multi-platform images; emulated amd64 builds take minutes, too slow for every local CI run. Phase B's pipeline can run it on native runners | Adding it to `make ci`; skipping the check |
 | D70 | `db` runs with `user: postgres` | The official image starts as root and only drops privileges for the server, so `docker compose exec db id` reported root, failing §16. Its data and socket directories are already owned by `postgres`; a cold start and the existing dev volume both work | Accepting a root `exec`; a custom Postgres image |
+| D71 | The release label is `<APP_VERSION or 0.0.0>+<sha12>`, with dot-separated suffixes for dirty or failed builds | A bare `APP_VERSION` (`0.1.0`) would label every local build the same; the SHA makes each build identifiable, and suffixes stay valid semver build metadata | Using `APP_VERSION` verbatim |
+| D72 | A rerun whose `external_id` matches the last recorded build is a no-op; `--dry-run` never writes | Re-posting would bump `finished_at` and the version for a build that didn't change; a dry run that created the service would not be dry | Relying only on ingest idempotency |
+| D73 | `scripts/` has its own ruff config (target py310) and its tests run on Python 3.10 via `uv run --no-project --python 3.10`; `make lint` and `make test` include both | D58 says host scripts run on the host's `python3`; testing on that exact version proves it instead of assuming it | Running them in the api's Python 3.13 venv |
+| D74 | `record_deploy.py` takes `--repo` | Lets E2E scenario 10 record a throwaway clone, and lets a pipeline run the script from outside the checkout | Requiring the working directory to be the repo |
+| D75 | Scenario 10 compares the recorded commits with `git log` as a set | Commits made in the same second share `committed_at`, and the API breaks such ties by SHA (D37), so order isn't `git log`'s. Found in the first run | Asserting `git log` order |
 
 ---
 
@@ -942,8 +951,8 @@ The build order of operations, referred to as **BOOO**. Work milestone by milest
 | M7 | Seed generator (normal + `--large`) | `make seed` produces the §10 profiles; perf check recorded || ✅ done |
 | M8 | Frontend: API client + types, layout, Dashboard | dashboard renders seeded bands correctly || ✅ done |
 | M9 | Frontend: Services, Deployments, Failures pages; conflict handling | Vitest green || ✅ done |
-| M10 | Playwright E2E in the isolated project, `compose.dev.yaml`, multi-arch build check, `make ci`, README | E2E green without touching dev data || ✅ done (scenario 10 pending M11) |
-| M11 | **Self-tracking:** `scripts/record_deploy.py` + tests, `GIT_SHA` build-arg plumbing, `make up` auto-record, `make record-deploy` | §15 behaviors verified; **from this commit on, the tracker records its own builds**; §16 checklist complete | |
+| M10 | Playwright E2E in the isolated project, `compose.dev.yaml`, multi-arch build check, `make ci`, README | E2E green without touching dev data || ✅ done |
+| M11 | **Self-tracking:** `scripts/record_deploy.py` + tests, `GIT_SHA` build-arg plumbing, `make up` auto-record, `make record-deploy` | §15 behaviors verified; **from this commit on, the tracker records its own builds**; §16 checklist complete || ✅ done |
 
 **Working agreements for the implementer:**
 - Don't change API contracts, metric definitions, or golden expectations without updating this document and §17.
