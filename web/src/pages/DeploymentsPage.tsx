@@ -13,6 +13,7 @@ import { Field } from '../components/Form';
 import { inputClass } from '../components/formStyles';
 import { Pagination } from '../components/Pagination';
 import { EmptyState, ErrorState, LoadingState } from '../components/States';
+import { cx } from '../lib/cx';
 import { formatDateTime } from '../lib/format';
 import { STATUS_LABELS } from '../lib/labels';
 import { ENVIRONMENTS, KINDS, STATUSES } from '../lib/schemas';
@@ -86,10 +87,10 @@ export function DeploymentsPage() {
   return (
     <div className={styles.page}>
       <div className={styles.titleRow}>
-        <h1>Deployments</h1>
-        <Link to="/deployments/new" className={styles.linkButton}>
-          New deployment
-        </Link>
+        <div>
+          <h1>Deployments</h1>
+          <p className={styles.subtitle}>Every release to every environment, newest first.</p>
+        </div>
       </div>
 
       <form
@@ -171,11 +172,13 @@ export function DeploymentsPage() {
               <tbody>
                 {page.data.items.map((d) => (
                   <tr key={d.id}>
-                    <td>
+                    <td className={cx(styles.primaryCell, styles.nowrap)}>
                       <Link to={`/deployments/${d.id}`}>{formatDateTime(d.started_at)}</Link>
                     </td>
                     <td>{serviceName.get(d.service_id) ?? '…'}</td>
-                    <td>{d.environment}</td>
+                    <td>
+                      <span className={styles.env}>{d.environment}</span>
+                    </td>
                     <td className={styles.mono}>{d.release}</td>
                     <td>
                       <StatusBadge status={d.status} />
@@ -183,7 +186,9 @@ export function DeploymentsPage() {
                     <td>
                       <KindBadge kind={d.kind} />
                     </td>
-                    <td>{formatDateTime(d.finished_at)}</td>
+                    <td className={cx(styles.muted, styles.nowrap)}>
+                      {formatDateTime(d.finished_at)}
+                    </td>
                   </tr>
                 ))}
               </tbody>

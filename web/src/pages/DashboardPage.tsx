@@ -2,7 +2,10 @@ import { useSearchParams } from 'react-router';
 
 import type { Schemas } from '../api/client';
 import { useDoraSummary, useDoraTimeseries, useServiceOptions } from '../api/queries';
+import { Field } from '../components/Form';
+import { inputClass } from '../components/formStyles';
 import { MetricCards } from '../components/MetricCards';
+import { SegmentedControl } from '../components/SegmentedControl';
 import { EmptyState, ErrorState, LoadingState } from '../components/States';
 import { TrendChart } from '../components/TrendChart';
 import {
@@ -44,11 +47,21 @@ export function DashboardPage() {
   return (
     <div className={styles.page}>
       <header className={styles.heading}>
-        <h1>DORA metrics</h1>
-        <p className={styles.subtitle}>
-          Software delivery performance for {filters.environment}
-          {summary.data?.window && `, ${plural(Math.round(summary.data.window.days), 'day')}`}.
-        </p>
+        <div>
+          <h1>DORA metrics</h1>
+          <p className={styles.subtitle}>
+            Software delivery performance for {filters.environment}
+            {summary.data?.window && `, ${plural(Math.round(summary.data.window.days), 'day')}`}.
+          </p>
+        </div>
+        <SegmentedControl
+          label="Window"
+          value={filters.preset}
+          options={PRESETS.map((p) => ({ value: p.value, label: p.short, title: p.label }))}
+          onChange={(preset) => {
+            update({ preset });
+          }}
+        />
       </header>
 
       <form
@@ -58,74 +71,71 @@ export function DashboardPage() {
           e.preventDefault();
         }}
       >
-        <label>
-          Service
-          <select
-            value={filters.serviceId ?? ''}
-            onChange={(e) => {
-              update({ serviceId: e.target.value || null });
-            }}
-          >
-            <option value="">All services</option>
-            {services.data?.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Environment
-          <select
-            value={filters.environment}
-            onChange={(e) => {
-              update({ environment: e.target.value as DashboardFilters['environment'] });
-            }}
-          >
-            {ENVIRONMENTS.map((env) => (
-              <option key={env} value={env}>
-                {env}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Window
-          <select
-            value={filters.preset}
-            onChange={(e) => {
-              update({ preset: e.target.value as DashboardFilters['preset'] });
-            }}
-          >
-            {PRESETS.map((p) => (
-              <option key={p.value} value={p.value}>
-                {p.label}
-              </option>
-            ))}
-          </select>
-        </label>
+        <Field label="Service">
+          {(props) => (
+            <select
+              {...props}
+              value={filters.serviceId ?? ''}
+              onChange={(e) => {
+                update({ serviceId: e.target.value || null });
+              }}
+              className={inputClass}
+            >
+              <option value="">All services</option>
+              {services.data?.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
+          )}
+        </Field>
+        <Field label="Environment">
+          {(props) => (
+            <select
+              {...props}
+              value={filters.environment}
+              onChange={(e) => {
+                update({ environment: e.target.value as DashboardFilters['environment'] });
+              }}
+              className={inputClass}
+            >
+              {ENVIRONMENTS.map((env) => (
+                <option key={env} value={env}>
+                  {env}
+                </option>
+              ))}
+            </select>
+          )}
+        </Field>
         {filters.preset === 'custom' && (
           <>
-            <label>
-              From
-              <input
-                type="date"
-                value={filters.from}
-                onChange={(e) => {
-                  update({ from: e.target.value });
-                }}
-              />
-            </label>
-            <label>
-              To
-              <input
-                type="date"
-                value={filters.to}
-                onChange={(e) => {
-                  update({ to: e.target.value });
-                }}
-              />
-            </label>
+            <Field label="From">
+              {(props) => (
+                <input
+                  {...props}
+                  type="date"
+                  value={filters.from}
+                  onChange={(e) => {
+                    update({ from: e.target.value });
+                  }}
+                  className={inputClass}
+                />
+              )}
+            </Field>
+            <Field label="To">
+              {(props) => (
+                <input
+                  {...props}
+                  type="date"
+                  value={filters.to}
+                  onChange={(e) => {
+                    update({ to: e.target.value });
+                  }}
+                  className={inputClass}
+                />
+              )}
+            </Field>
           </>
         )}
       </form>
@@ -175,14 +185,14 @@ function Trends({ points }: { points: Schemas['TimeseriesPoint'][] }) {
         title="Deployments per week"
         kind="bar"
         points={points}
-        series={[{ key: 'deployment_count', label: 'Deployments', color: '#2456c4' }]}
+        series={[{ key: 'deployment_count', label: 'Deployments', color: 'var(--chart-2)' }]}
         format={(v) => String(Math.round(v))}
       />
       <TrendChart
         title="Median change lead time"
         kind="line"
         points={points}
-        series={[{ key: 'median_lead_time_hours', label: 'Lead time', color: '#146c3c' }]}
+        series={[{ key: 'median_lead_time_hours', label: 'Lead time', color: 'var(--chart-3)' }]}
         format={formatHours}
         axisFormat={formatAxisHours}
       />
@@ -191,8 +201,8 @@ function Trends({ points }: { points: Schemas['TimeseriesPoint'][] }) {
         kind="line"
         points={points}
         series={[
-          { key: 'change_fail_rate', label: 'Change fail rate', color: '#b42318' },
-          { key: 'rework_rate', label: 'Rework rate', color: '#845400' },
+          { key: 'change_fail_rate', label: 'Change fail rate', color: 'var(--chart-3)' },
+          { key: 'rework_rate', label: 'Rework rate', color: 'var(--chart-2)', dashed: true },
         ]}
         format={formatPercent}
         axisFormat={formatAxisPercent}
@@ -201,7 +211,7 @@ function Trends({ points }: { points: Schemas['TimeseriesPoint'][] }) {
         title="Median recovery time"
         kind="line"
         points={points}
-        series={[{ key: 'median_recovery_hours', label: 'Recovery time', color: '#6941c6' }]}
+        series={[{ key: 'median_recovery_hours', label: 'Recovery time', color: 'var(--chart-3)' }]}
         format={formatHours}
         axisFormat={formatAxisHours}
       />

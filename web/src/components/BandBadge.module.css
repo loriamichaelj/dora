@@ -1,35 +1,39 @@
 .badge {
-  display: inline-block;
-  padding: 2px 10px;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 9px;
   border-radius: 999px;
   font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
+  font-weight: 650;
+  line-height: 1;
   white-space: nowrap;
 }
 
 .elite {
-  background: var(--band-elite-bg);
-  color: var(--band-elite-fg);
+  background: var(--tone-good-bg);
+  color: var(--tone-good-fg);
 }
 
 .high {
-  background: var(--band-high-bg);
-  color: var(--band-high-fg);
+  background: var(--tone-info-bg);
+  color: var(--tone-info-fg);
 }
 
 .medium {
-  background: var(--band-medium-bg);
-  color: var(--band-medium-fg);
+  background: var(--tone-warn-bg);
+  color: var(--tone-warn-fg);
 }
 
 .low {
-  background: var(--band-low-bg);
-  color: var(--band-low-fg);
+  background: var(--tone-bad-bg);
+  color: var(--tone-bad-fg);
 }
 
 .none {
-  background: var(--band-none-bg);
-  color: var(--band-none-fg);
-  font-weight: 500;
+  background: var(--tone-neutral-bg);
+  color: var(--tone-neutral-fg);
+  font-weight: 550;
 }

@@ -1,33 +1,60 @@
 .badge {
-  display: inline-block;
-  padding: 1px 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 9px;
   border-radius: 999px;
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 650;
+  line-height: 1;
   white-space: nowrap;
 }
 
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.pulse {
+  animation: pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pulse {
+    animation: none;
+  }
+}
+
 .good {
-  background: var(--band-elite-bg);
-  color: var(--band-elite-fg);
+  background: var(--tone-good-bg);
+  color: var(--tone-good-fg);
 }
 
 .info {
-  background: var(--band-high-bg);
-  color: var(--band-high-fg);
+  background: var(--tone-info-bg);
+  color: var(--tone-info-fg);
 }
 
 .warn {
-  background: var(--band-medium-bg);
-  color: var(--band-medium-fg);
+  background: var(--tone-warn-bg);
+  color: var(--tone-warn-fg);
 }
 
 .bad {
-  background: var(--band-low-bg);
-  color: var(--band-low-fg);
+  background: var(--tone-bad-bg);
+  color: var(--tone-bad-fg);
 }
 
 .neutral {
-  background: var(--band-none-bg);
-  color: var(--band-none-fg);
+  background: var(--tone-neutral-bg);
+  color: var(--tone-neutral-fg);
 }

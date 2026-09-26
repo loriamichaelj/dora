@@ -15,6 +15,7 @@ import { Pagination } from '../components/Pagination';
 import { EmptyState, ErrorState, LoadingState } from '../components/States';
 import { useToast } from '../components/toastContext';
 import { fromLocalInput, nowLocalInput } from '../lib/datetime';
+import { cx } from '../lib/cx';
 import { formatDateTime } from '../lib/format';
 import { type ResolveValues, resolveSchema } from '../lib/schemas';
 import { useMutationErrors } from '../lib/useMutationErrors';
@@ -51,7 +52,14 @@ export function FailuresPage() {
 
   return (
     <div className={styles.page}>
-      <h1>Failures</h1>
+      <div className={styles.titleRow}>
+        <div>
+          <h1>Failures</h1>
+          <p className={styles.subtitle}>
+            Production failures caused by a deployment, and how long each took to fix.
+          </p>
+        </div>
+      </div>
 
       <form
         className={styles.toolbar}
@@ -125,7 +133,7 @@ export function FailuresPage() {
               <tbody>
                 {page.data.items.map((f) => (
                   <tr key={f.id}>
-                    <td>
+                    <td className={cx(styles.primaryCell, styles.nowrap)}>
                       <Link to={`/deployments/${f.deployment_id}`}>
                         {formatDateTime(f.detected_at)}
                       </Link>
@@ -138,7 +146,9 @@ export function FailuresPage() {
                     <td>
                       <OpenBadge resolvedAt={f.resolved_at} />
                     </td>
-                    <td>{formatDateTime(f.resolved_at)}</td>
+                    <td className={cx(styles.muted, styles.nowrap)}>
+                      {formatDateTime(f.resolved_at)}
+                    </td>
                     <td>
                       {!f.resolved_at && (
                         <Button

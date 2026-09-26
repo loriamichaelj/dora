@@ -1,3 +1,4 @@
+import { cx } from '../lib/cx';
 import { type Band, BandBadge } from './BandBadge';
 import styles from './MetricCard.module.css';
 
@@ -13,7 +14,7 @@ interface Props {
 
 export function MetricCard({ title, value, band, detail, definition, bandEmptyLabel }: Props) {
   return (
-    <article className={styles.card} aria-label={title}>
+    <article className={cx(styles.card, band && styles[band])} aria-label={title}>
       <header className={styles.header}>
         <h3 className={styles.title}>{title}</h3>
         <BandBadge band={band} {...(bandEmptyLabel ? { emptyLabel: bandEmptyLabel } : {})} />

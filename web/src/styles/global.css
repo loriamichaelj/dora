@@ -1,36 +1,159 @@
+/*
+ * Tokens first; every color in the app reads a token, so dark mode is one block.
+ * Light/dark follows the OS unless <html data-theme="light|dark"> is set
+ * (ThemeToggle). The dark values are declared twice, once per scope.
+ */
+
 :root {
-  --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  --font-mono: ui-monospace, 'SF Mono', Menlo, monospace;
+  color-scheme: light;
+  --font-sans:
+    'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
 
-  --bg: #f6f7f9;
-  --surface: #ffffff;
-  --border: #dde1e6;
-  --text: #1b1f24;
-  --text-muted: #5b6470;
-  --accent: #2456c4;
-  --accent-soft: #e8eefb;
-  --danger: #b42318;
-  --danger-soft: #fdecea;
+  --color-bg: #f4f5f8;
+  --color-surface: #ffffff;
+  --color-surface-2: #f8f9fb;
+  --color-text: #151922;
+  --color-muted: #5a6371;
+  --color-border: #e3e6eb;
+  --color-border-strong: #cdd2da;
+  --color-primary: #3b5bdb;
+  --color-primary-hover: #3050c8;
+  --color-primary-soft: #ebf0ff;
+  --color-primary-text: #ffffff;
+  --color-danger: #c92a2a;
+  --color-danger-hover: #b02525;
+  --color-danger-soft: #fdeded;
 
-  /* Band colors always travel with a text label; color is never the only signal. */
-  --band-elite-bg: #dcf5e7;
-  --band-elite-fg: #146c3c;
-  --band-high-bg: #dbeefe;
-  --band-high-fg: #145a91;
-  --band-medium-bg: #fdf1d6;
-  --band-medium-fg: #845400;
-  --band-low-bg: #fde4e1;
-  --band-low-fg: #9b2016;
-  --band-none-bg: #eceef1;
-  --band-none-fg: #5b6470;
+  /* Tones: background + foreground pairs, always with a text label (§8). */
+  --tone-good-bg: #e5f6ec;
+  --tone-good-fg: #17703d;
+  --tone-warn-bg: #fff3d6;
+  --tone-warn-fg: #7f5200;
+  --tone-bad-bg: #fde8e7;
+  --tone-bad-fg: #aa1f16;
+  --tone-info-bg: #e7efff;
+  --tone-info-fg: #1f4fb0;
+  --tone-neutral-bg: #eef0f3;
+  --tone-neutral-fg: #485160;
 
-  --radius: 10px;
+  /* Benchmark bands: a metric card's accent. Its badge names the band. */
+  --band-elite: #2f9e5b;
+  --band-high: #3987e5;
+  --band-medium: #e0a526;
+  --band-low: #d9463b;
+
+  /* Charts: a one-hue ramp, 1 (light) to 4 (dark). */
+  --chart-1: #86b6ef;
+  --chart-2: #3987e5;
+  --chart-3: #1c5cab;
+  --chart-4: #0d366b;
+  --chart-grid: #eceef2;
+  --chart-axis: #cdd2da;
+
+  --shadow-sm: 0 1px 2px rgb(16 24 40 / 5%);
+  --shadow-md: 0 1px 3px rgb(16 24 40 / 6%), 0 8px 24px rgb(16 24 40 / 8%);
+  --shadow-lg: 0 12px 40px rgb(16 24 40 / 18%);
+  --header-bg: rgb(255 255 255 / 85%);
+  --backdrop: rgb(16 24 40 / 45%);
+
+  --radius: 12px;
+  --radius-sm: 8px;
+  --radius-xs: 6px;
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
   --space-4: 16px;
   --space-5: 24px;
   --space-6: 32px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+    --color-bg: #0e1015;
+    --color-surface: #161920;
+    --color-surface-2: #1b1f27;
+    --color-text: #e7e9ee;
+    --color-muted: #a1a9b6;
+    --color-border: #272c36;
+    --color-border-strong: #394150;
+    --color-primary: #7d97ff;
+    --color-primary-hover: #95abff;
+    --color-primary-soft: #1d2542;
+    --color-primary-text: #0a0d18;
+    --color-danger: #ff8a80;
+    --color-danger-hover: #ffa39b;
+    --color-danger-soft: #3b1a1c;
+    --tone-good-bg: #13301f;
+    --tone-good-fg: #74d69f;
+    --tone-warn-bg: #36290c;
+    --tone-warn-fg: #f3c35b;
+    --tone-bad-bg: #3b1a1c;
+    --tone-bad-fg: #ff9d96;
+    --tone-info-bg: #16284a;
+    --tone-info-fg: #92b7ff;
+    --tone-neutral-bg: #242933;
+    --tone-neutral-fg: #b7bfcb;
+    --band-elite: #4cc47f;
+    --band-high: #5598e7;
+    --band-medium: #e8b440;
+    --band-low: #f06a5f;
+    --chart-1: #184f95;
+    --chart-2: #5598e7;
+    --chart-3: #9ec5f4;
+    --chart-4: #d4e5fb;
+    --chart-grid: #232833;
+    --chart-axis: #394150;
+    --shadow-sm: 0 1px 2px rgb(0 0 0 / 30%);
+    --shadow-md: 0 1px 3px rgb(0 0 0 / 30%), 0 8px 24px rgb(0 0 0 / 35%);
+    --shadow-lg: 0 12px 40px rgb(0 0 0 / 55%);
+    --header-bg: rgb(22 25 32 / 85%);
+    --backdrop: rgb(0 0 0 / 60%);
+  }
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --color-bg: #0e1015;
+  --color-surface: #161920;
+  --color-surface-2: #1b1f27;
+  --color-text: #e7e9ee;
+  --color-muted: #a1a9b6;
+  --color-border: #272c36;
+  --color-border-strong: #394150;
+  --color-primary: #7d97ff;
+  --color-primary-hover: #95abff;
+  --color-primary-soft: #1d2542;
+  --color-primary-text: #0a0d18;
+  --color-danger: #ff8a80;
+  --color-danger-hover: #ffa39b;
+  --color-danger-soft: #3b1a1c;
+  --tone-good-bg: #13301f;
+  --tone-good-fg: #74d69f;
+  --tone-warn-bg: #36290c;
+  --tone-warn-fg: #f3c35b;
+  --tone-bad-bg: #3b1a1c;
+  --tone-bad-fg: #ff9d96;
+  --tone-info-bg: #16284a;
+  --tone-info-fg: #92b7ff;
+  --tone-neutral-bg: #242933;
+  --tone-neutral-fg: #b7bfcb;
+  --band-elite: #4cc47f;
+  --band-high: #5598e7;
+  --band-medium: #e8b440;
+  --band-low: #f06a5f;
+  --chart-1: #184f95;
+  --chart-2: #5598e7;
+  --chart-3: #9ec5f4;
+  --chart-4: #d4e5fb;
+  --chart-grid: #232833;
+  --chart-axis: #394150;
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 30%);
+  --shadow-md: 0 1px 3px rgb(0 0 0 / 30%), 0 8px 24px rgb(0 0 0 / 35%);
+  --shadow-lg: 0 12px 40px rgb(0 0 0 / 55%);
+  --header-bg: rgb(22 25 32 / 85%);
+  --backdrop: rgb(0 0 0 / 60%);
 }
 
 *,
@@ -41,26 +164,60 @@
 
 body {
   margin: 0;
-  background: var(--bg);
-  color: var(--text);
+  background: var(--color-bg);
+  color: var(--color-text);
   font-family: var(--font-sans);
   font-size: 15px;
-  line-height: 1.45;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
 }
 
 h1,
 h2,
 h3 {
-  line-height: 1.2;
+  margin: 0;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+}
+
+h1 {
+  font-size: 26px;
+  font-weight: 700;
+}
+
+h2 {
+  font-size: 16px;
+  font-weight: 650;
+}
+
+p {
   margin: 0;
 }
 
 a {
-  color: var(--accent);
+  color: var(--color-primary);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}
+
+input,
+select,
+textarea,
+button {
+  font: inherit;
 }
 
 :focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--color-primary);
   outline-offset: 2px;
 }
 
@@ -71,4 +228,10 @@ a {
   overflow: hidden;
   clip: rect(0 0 0 0);
   white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  h1 {
+    font-size: 22px;
+  }
 }

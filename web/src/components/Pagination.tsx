@@ -1,3 +1,4 @@
+import { Icon } from './Icon';
 import styles from './Pagination.module.css';
 
 interface Props {
@@ -23,6 +24,7 @@ export function Pagination({ total, limit, offset, onChange }: Props) {
           onChange(Math.max(0, offset - limit));
         }}
       >
+        <Icon name="prev" size={14} />
         Previous
       </button>
       <button
@@ -33,6 +35,7 @@ export function Pagination({ total, limit, offset, onChange }: Props) {
         }}
       >
         Next
+        <Icon name="next" size={14} />
       </button>
     </nav>
   );

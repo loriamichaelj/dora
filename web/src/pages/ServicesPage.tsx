@@ -5,10 +5,12 @@ import { Link, useNavigate, useSearchParams } from 'react-router';
 
 import { PAGE_SIZE, useCreateService, useServicesPage } from '../api/resources';
 import { Button, Field, FormActions } from '../components/Form';
+import { Icon } from '../components/Icon';
 import { inputClass } from '../components/formStyles';
 import { Pagination } from '../components/Pagination';
 import { EmptyState, ErrorState, LoadingState } from '../components/States';
 import { useToast } from '../components/toastContext';
+import { cx } from '../lib/cx';
 import { formatDateTime } from '../lib/format';
 import { type CreateServiceValues, createServiceSchema } from '../lib/schemas';
 import { useMutationErrors } from '../lib/useMutationErrors';
@@ -35,14 +37,25 @@ export function ServicesPage() {
   return (
     <div className={styles.page}>
       <div className={styles.titleRow}>
-        <h1>Services</h1>
+        <div>
+          <h1>Services</h1>
+          <p className={styles.subtitle}>Everything that ships, and the team that owns it.</p>
+        </div>
         <Button
+          variant={creating ? 'secondary' : 'primary'}
           onClick={() => {
             setCreating((open) => !open);
           }}
           aria-expanded={creating}
         >
-          {creating ? 'Cancel' : 'New service'}
+          {creating ? (
+            'Cancel'
+          ) : (
+            <>
+              <Icon name="plus" />
+              New service
+            </>
+          )}
         </Button>
       </div>
 
@@ -63,14 +76,15 @@ export function ServicesPage() {
           setQuery({ q: typeof value === 'string' ? value.trim() : '' });
         }}
       >
-        <Field label="Search by name or slug">
+        <Field label="Search by name or slug" className={styles.grow}>
           {(props) => <input {...props} name="q" defaultValue={q} className={inputClass} />}
         </Field>
-        <FormActions>
+        <div className={styles.fit}>
           <Button type="submit" variant="secondary">
+            <Icon name="search" />
             Search
           </Button>
-        </FormActions>
+        </div>
       </form>
 
       {page.isPending ? (
@@ -96,12 +110,14 @@ export function ServicesPage() {
               <tbody>
                 {page.data.items.map((service) => (
                   <tr key={service.id}>
-                    <td>
+                    <td className={styles.primaryCell}>
                       <Link to={`/services/${service.id}`}>{service.name}</Link>
                     </td>
                     <td className={styles.mono}>{service.slug}</td>
                     <td>{service.owner_team}</td>
-                    <td>{formatDateTime(service.created_at)}</td>
+                    <td className={cx(styles.muted, styles.nowrap)}>
+                      {formatDateTime(service.created_at)}
+                    </td>
                   </tr>
                 ))}
               </tbody>

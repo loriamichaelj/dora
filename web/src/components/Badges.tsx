@@ -15,8 +15,18 @@ const STATUS_TONE: Record<Status, string | undefined> = {
   rolled_back: styles.warn,
 };
 
+/** A decorative status dot; the badge's text carries the meaning. */
+function Dot({ pulse = false }: { pulse?: boolean }) {
+  return <span className={cx(styles.dot, pulse && styles.pulse)} aria-hidden="true" />;
+}
+
 export function StatusBadge({ status }: { status: Status }) {
-  return <span className={cx(styles.badge, STATUS_TONE[status])}>{STATUS_LABELS[status]}</span>;
+  return (
+    <span className={cx(styles.badge, STATUS_TONE[status])}>
+      <Dot pulse={status === 'in_progress'} />
+      {STATUS_LABELS[status]}
+    </span>
+  );
 }
 
 export function KindBadge({ kind }: { kind: Kind }) {
@@ -35,8 +45,14 @@ export function SeverityBadge({ severity }: { severity: Severity }) {
 
 export function OpenBadge({ resolvedAt }: { resolvedAt: string | null }) {
   return resolvedAt ? (
-    <span className={cx(styles.badge, styles.good)}>Resolved</span>
+    <span className={cx(styles.badge, styles.good)}>
+      <Dot />
+      Resolved
+    </span>
   ) : (
-    <span className={cx(styles.badge, styles.bad)}>Open</span>
+    <span className={cx(styles.badge, styles.bad)}>
+      <Dot pulse />
+      Open
+    </span>
   );
 }

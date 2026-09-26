@@ -1,11 +1,39 @@
 .card {
+  position: relative;
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
-  padding: var(--space-4);
-  background: var(--surface);
-  border: 1px solid var(--border);
+  gap: 6px;
+  padding: var(--space-4) var(--space-5);
+  overflow: hidden;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
   border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+}
+
+/* The band's accent; the badge beside the title names it. */
+.card::before {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: transparent;
+  content: '';
+}
+
+.elite::before {
+  background: var(--band-elite);
+}
+
+.high::before {
+  background: var(--band-high);
+}
+
+.medium::before {
+  background: var(--band-medium);
+}
+
+.low::before {
+  background: var(--band-low);
 }
 
 .header {
@@ -16,25 +44,29 @@
 }
 
 .title {
-  font-size: 14px;
+  color: var(--color-muted);
+  font-size: 13px;
   font-weight: 600;
-  color: var(--text-muted);
+  letter-spacing: 0;
 }
 
 .value {
-  margin: 0;
-  font-size: 28px;
+  font-size: 30px;
   font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
   font-variant-numeric: tabular-nums;
 }
 
 .detail {
-  margin: 0;
+  color: var(--color-text);
   font-size: 13px;
 }
 
 .definition {
-  margin: 0;
-  font-size: 12px;
-  color: var(--text-muted);
+  margin-top: auto;
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--color-border);
+  color: var(--color-muted);
+  font-size: 12.5px;
 }

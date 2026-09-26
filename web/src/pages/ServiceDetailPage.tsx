@@ -10,9 +10,11 @@ import { useDeploymentsPage, useService, useUpdateService } from '../api/resourc
 import { KindBadge, StatusBadge } from '../components/Badges';
 import { Button, Field, FormActions } from '../components/Form';
 import { inputClass } from '../components/formStyles';
+import { Icon } from '../components/Icon';
 import { MetricCards } from '../components/MetricCards';
 import { EmptyState, ErrorState, LoadingState } from '../components/States';
 import { useToast } from '../components/toastContext';
+import { cx } from '../lib/cx';
 import { formatDateTime } from '../lib/format';
 import { type EditServiceValues, editServiceSchema } from '../lib/schemas';
 import { useMutationErrors } from '../lib/useMutationErrors';
@@ -39,7 +41,10 @@ export function ServiceDetailPage() {
             <span className={styles.mono}>{s.slug}</span> · owned by {s.owner_team}
           </p>
         </div>
-        <Link to={`/?service=${s.id}`}>Open in dashboard</Link>
+        <Link to={`/?service=${s.id}`} className={styles.linkButton}>
+          <Icon name="chart" />
+          Open in dashboard
+        </Link>
       </div>
       <EditServiceForm service={s} />
       <ServiceMetrics serviceId={s.id} />
@@ -171,7 +176,9 @@ function RecentDeployments({ serviceId }: { serviceId: string }) {
     <section className={styles.panel} aria-labelledby="recent-deployments">
       <div className={styles.titleRow}>
         <h2 id="recent-deployments">Recent deployments</h2>
-        <Link to={`/deployments?service=${serviceId}`}>All deployments</Link>
+        <Link to={`/deployments?service=${serviceId}`} className={styles.panelLink}>
+          All deployments
+        </Link>
       </div>
       {page.isPending ? (
         <LoadingState label="Loading deployments…" />
@@ -180,34 +187,38 @@ function RecentDeployments({ serviceId }: { serviceId: string }) {
       ) : page.data.items.length === 0 ? (
         <EmptyState title="No deployments recorded" />
       ) : (
-        <table className={styles.table}>
-          <thead>
-            <tr>
-              <th scope="col">Started</th>
-              <th scope="col">Environment</th>
-              <th scope="col">Release</th>
-              <th scope="col">Status</th>
-              <th scope="col">Kind</th>
-            </tr>
-          </thead>
-          <tbody>
-            {page.data.items.map((d) => (
-              <tr key={d.id}>
-                <td>
-                  <Link to={`/deployments/${d.id}`}>{formatDateTime(d.started_at)}</Link>
-                </td>
-                <td>{d.environment}</td>
-                <td className={styles.mono}>{d.release}</td>
-                <td>
-                  <StatusBadge status={d.status} />
-                </td>
-                <td>
-                  <KindBadge kind={d.kind} />
-                </td>
+        <div className={styles.flush}>
+          <table className={styles.table}>
+            <thead>
+              <tr>
+                <th scope="col">Started</th>
+                <th scope="col">Environment</th>
+                <th scope="col">Release</th>
+                <th scope="col">Status</th>
+                <th scope="col">Kind</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {page.data.items.map((d) => (
+                <tr key={d.id}>
+                  <td className={cx(styles.primaryCell, styles.nowrap)}>
+                    <Link to={`/deployments/${d.id}`}>{formatDateTime(d.started_at)}</Link>
+                  </td>
+                  <td>
+                    <span className={styles.env}>{d.environment}</span>
+                  </td>
+                  <td className={styles.mono}>{d.release}</td>
+                  <td>
+                    <StatusBadge status={d.status} />
+                  </td>
+                  <td>
+                    <KindBadge kind={d.kind} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </section>
   );

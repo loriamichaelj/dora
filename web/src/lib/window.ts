@@ -10,11 +10,11 @@ export type Environment = Schemas['DeploymentOut']['environment'];
 export type Preset = '7' | '30' | '90' | 'custom';
 
 export const ENVIRONMENTS: readonly Environment[] = ['production', 'staging', 'development'];
-export const PRESETS: readonly { value: Preset; label: string }[] = [
-  { value: '7', label: 'Last 7 days' },
-  { value: '30', label: 'Last 30 days' },
-  { value: '90', label: 'Last 90 days' },
-  { value: 'custom', label: 'Custom range' },
+export const PRESETS: readonly { value: Preset; label: string; short: string }[] = [
+  { value: '7', label: 'Last 7 days', short: '7 days' },
+  { value: '30', label: 'Last 30 days', short: '30 days' },
+  { value: '90', label: 'Last 90 days', short: '90 days' },
+  { value: 'custom', label: 'Custom range', short: 'Custom' },
 ];
 const MAX_DAYS = 365;
 const DAY_MS = 86_400_000;

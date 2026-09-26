@@ -11,6 +11,7 @@ interface FieldProps {
   label: string;
   error?: string | undefined;
   hint?: string;
+  className?: string | undefined;
   children: (props: {
     id: string;
     'aria-invalid': boolean;
@@ -18,13 +19,13 @@ interface FieldProps {
   }) => ReactNode;
 }
 
-export function Field({ label, error, hint, children }: FieldProps) {
+export function Field({ label, error, hint, className, children }: FieldProps) {
   const id = useId();
   const errorId = `${id}-error`;
   const hintId = `${id}-hint`;
   const describedBy = [error ? errorId : null, hint ? hintId : null].filter(Boolean).join(' ');
   return (
-    <div className={styles.field}>
+    <div className={cx(styles.field, className)}>
       <label htmlFor={id} className={styles.label}>
         {label}
       </label>

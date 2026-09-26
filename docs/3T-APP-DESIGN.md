@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Author** | M.L. |
-| **Status** | v1.0: Phase A complete (BOOO M0–M11 done; §16 met) |
+| **Status** | v1.1: Phase A complete (BOOO M0–M11 done; §16 met); frontend restyled |
 | **Date** | 2026-09-25 |
 | **Scope** | Phase A — full stack running end-to-end and tested on localhost via Docker Compose |
 | **Out of scope** | Phase B (AWS, IaC, GitHub Actions CI/CD, container orchestration, SSO) |
@@ -29,6 +29,7 @@
 | v0.15 | M10 decisions (D66–D70): isolated E2E stack with its own env file; scenario 10 pending M11; `compose.dev.yaml`; the multi-arch builder; `db` runs as `postgres`. §16 items ticked where verified; self-tracking remains for M11. |
 | v0.16 | M11 decisions (D71–D75): release label format; no-op reruns and side-effect-free dry runs; script lint and tests on Python 3.10; `--repo`; scenario 10 compares commit sets. All ten E2E scenarios pass. |
 | v1.0 | Phase A Definition of Done (§16) met: every item ticked with the evidence recorded beside it. |
+| v1.1 | Frontend restyle in Beacon's design language, with dark mode (D76). No behavior or API change; all web and E2E tests pass unchanged. |
 
 ---
 
@@ -484,6 +485,7 @@ Query parameters: `service_id` (optional; omit for org-wide), `environment` (def
 - Render problem+json errors: field errors appear inline, and anything else appears in a toast showing the `X-Request-ID`.
 - Loading, empty, and error states exist for every data view.
 - Accessibility: semantic HTML, labeled inputs, keyboard-navigable dialogs, and badges that carry text rather than relying on color alone.
+- **Look and feel (D76):** Beacon's design language: a sticky header with icon nav, a theme toggle, and a *New deployment* action; a 7/30/90/custom segmented control for the dashboard window; metric cards whose left accent matches the band; pill badges; and uppercase table headers. The page chrome makes no API requests of its own. Every color reads a token, and dark mode follows the OS unless the toggle overrides it.
 - The API base is always the relative `/api/v1`. In dev mode the Vite dev server **proxies** `/api` to the API, so there is no CORS configuration anywhere.
 
 ---
@@ -933,6 +935,7 @@ If both pass, it posts `succeeded` with `finished_at = now`. If either fails, it
 | D73 | `scripts/` has its own ruff config (target py310) and its tests run on Python 3.10 via `uv run --no-project --python 3.10`; `make lint` and `make test` include both | D58 says host scripts run on the host's `python3`; testing on that exact version proves it instead of assuming it | Running them in the api's Python 3.13 venv |
 | D74 | `record_deploy.py` takes `--repo` | Lets E2E scenario 10 record a throwaway clone, and lets a pipeline run the script from outside the checkout | Requiring the working directory to be the repo |
 | D75 | Scenario 10 compares the recorded commits with `git log` as a set | Commits made in the same second share `committed_at`, and the API breaks such ties by SHA (D37), so order isn't `git log`'s. Found in the first run | Asserting `git log` order |
+| D76 | One visual language shared with Beacon: color tokens with light and dark values, a system/light/dark toggle saved in `localStorage` and applied by an inline script in `index.html` before first paint, and a one-hue chart ramp read from tokens | Both apps sit side by side in the portfolio; tokens make dark mode one block of values, and the pre-paint script avoids a flash of the wrong theme | Per-component colors; a CSS-in-JS theme provider |
 
 ---
 

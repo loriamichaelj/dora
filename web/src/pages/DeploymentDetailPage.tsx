@@ -6,9 +6,11 @@ import type { Schemas } from '../api/client';
 import { useDeployment, useService, useUpdateDeployment } from '../api/resources';
 import { KindBadge, OpenBadge, SeverityBadge, StatusBadge } from '../components/Badges';
 import { Button, FormActions } from '../components/Form';
+import { Icon } from '../components/Icon';
 import { RecordFailureDialog } from '../components/RecordFailureDialog';
 import { EmptyState, ErrorState, LoadingState } from '../components/States';
 import { useToast } from '../components/toastContext';
+import { cx } from '../lib/cx';
 import { formatDateTime, NO_VALUE } from '../lib/format';
 import { useMutationErrors } from '../lib/useMutationErrors';
 import styles from './Pages.module.css';
@@ -70,6 +72,10 @@ function DeploymentView({ deployment: d }: { deployment: Deployment }) {
 
   return (
     <div className={styles.page}>
+      <Link to="/deployments" className={styles.back}>
+        <Icon name="back" />
+        Back to deployments
+      </Link>
       <div className={styles.titleRow}>
         <div>
           <h1 className={styles.monoInherit}>{d.release}</h1>
@@ -141,30 +147,32 @@ function DeploymentView({ deployment: d }: { deployment: Deployment }) {
         {d.failures.length === 0 ? (
           <p className={styles.muted}>No failures recorded against this deployment.</p>
         ) : (
-          <table className={styles.table}>
-            <thead>
-              <tr>
-                <th scope="col">Severity</th>
-                <th scope="col">Summary</th>
-                <th scope="col">Detected</th>
-                <th scope="col">Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {d.failures.map((f) => (
-                <tr key={f.id}>
-                  <td>
-                    <SeverityBadge severity={f.severity} />
-                  </td>
-                  <td>{f.summary}</td>
-                  <td>{formatDateTime(f.detected_at)}</td>
-                  <td>
-                    <OpenBadge resolvedAt={f.resolved_at} />
-                  </td>
+          <div className={styles.flush}>
+            <table className={styles.table}>
+              <thead>
+                <tr>
+                  <th scope="col">Severity</th>
+                  <th scope="col">Summary</th>
+                  <th scope="col">Detected</th>
+                  <th scope="col">Status</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {d.failures.map((f) => (
+                  <tr key={f.id}>
+                    <td>
+                      <SeverityBadge severity={f.severity} />
+                    </td>
+                    <td>{f.summary}</td>
+                    <td>{formatDateTime(f.detected_at)}</td>
+                    <td>
+                      <OpenBadge resolvedAt={f.resolved_at} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </section>
 
@@ -173,28 +181,32 @@ function DeploymentView({ deployment: d }: { deployment: Deployment }) {
         {d.commits.length === 0 ? (
           <EmptyState title="No commits linked" />
         ) : (
-          <table className={styles.table}>
-            <thead>
-              <tr>
-                <th scope="col">SHA</th>
-                <th scope="col">Message</th>
-                <th scope="col">Author</th>
-                <th scope="col">Committed</th>
-              </tr>
-            </thead>
-            <tbody>
-              {d.commits.map((c) => (
-                <tr key={c.id}>
-                  <td className={styles.mono} title={c.sha}>
-                    {c.sha.slice(0, 7)}
-                  </td>
-                  <td>{c.message ?? NO_VALUE}</td>
-                  <td>{c.author ?? NO_VALUE}</td>
-                  <td>{formatDateTime(c.committed_at)}</td>
+          <div className={styles.flush}>
+            <table className={styles.table}>
+              <thead>
+                <tr>
+                  <th scope="col">SHA</th>
+                  <th scope="col">Message</th>
+                  <th scope="col">Author</th>
+                  <th scope="col">Committed</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {d.commits.map((c) => (
+                  <tr key={c.id}>
+                    <td className={styles.mono} title={c.sha}>
+                      {c.sha.slice(0, 7)}
+                    </td>
+                    <td>{c.message ?? NO_VALUE}</td>
+                    <td>{c.author ?? NO_VALUE}</td>
+                    <td className={cx(styles.muted, styles.nowrap)}>
+                      {formatDateTime(c.committed_at)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </section>
 

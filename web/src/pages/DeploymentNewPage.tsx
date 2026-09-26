@@ -83,7 +83,12 @@ export function DeploymentNewPage() {
 
   return (
     <div className={styles.page}>
-      <h1>New deployment</h1>
+      <div>
+        <h1>New deployment</h1>
+        <p className={styles.subtitle}>
+          Record a release by hand. Pipelines record theirs through the ingest API.
+        </p>
+      </div>
       <form
         className={styles.panel}
         aria-label="New deployment"
