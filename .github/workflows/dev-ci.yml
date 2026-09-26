@@ -1,0 +1,24 @@
+name: dev-ci
+
+# Trigger stub (docs/CLOUD-DEVOPS-DESIGN.md §3.4). GitHub runs push workflows
+# from the pushed branch's own files, so this one small file lives on dev and
+# calls the real, reusable test workflow on main. It holds no logic, and the
+# branch filter keeps it inert if it's promoted to stage or prod.
+
+on:
+  push:
+    branches: [dev]
+
+permissions:
+  contents: read
+
+# A newer push to dev supersedes a run still testing an older one.
+concurrency:
+  group: dev-ci
+  cancel-in-progress: true
+
+jobs:
+  test:
+    uses: loriamichaelj/dora/.github/workflows/test.yml@main
+    with:
+      ref: ${{ github.sha }}
