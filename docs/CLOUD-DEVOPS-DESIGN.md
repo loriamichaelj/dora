@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Author** | M.L. |
-| **Status** | v0.4: B0–B1 done; B2 built, awaiting its first `bootstrap.yml` apply (§0, §10). Open items 1–2 resolved. **Dev only: one ECS cluster** |
+| **Status** | v0.5: B0–B2 done; next is B3, the network (§0, §10). Open items 1–2 resolved. **Dev only: one ECS cluster** |
 | **Date** | 2026-09-25 |
 | **Depends on** | [`3T-APP-DESIGN.md`](3T-APP-DESIGN.md) v1.0. Phase A is complete: the app runs and is fully tested on localhost, and it meets the portability constraints in §14 of that document. |
 | **Reference** | Beacon, `~/Code/CloudDevOps/AWS/three-tier-app-ec2/beacon`, [`docs/CLOUD-DEVOPS-DESIGN.md`](https://github.com/loriamichaelj/beacon/blob/dev/docs/CLOUD-DEVOPS-DESIGN.md). Dora follows Beacon's branch, workflow, bootstrap, state, and IAM patterns. The difference is compute: **ECS on Fargate** instead of EC2 instances, an AMI, and S3 tarballs. |
@@ -20,7 +20,7 @@
 | Scope | **Dev only.** One ECS cluster (`loria-dora-dev`); no stage or prod clusters, databases, load balancers, or subnets. Stage and prod appear in this design so adding them later is configuration, not redesign |
 | This design | ✅ Reviewed (B0) |
 | Workflows (B1) | ✅ `ci.yml` and `test.yml` on `main`; the `dev-ci.yml` stub on `dev` runs `make ci` on every push |
-| Bootstrap (B2) | 🔨 Built: `infra/bootstrap/`, `bootstrap.yml`, the manual role and five Environments configured. The first apply is next |
+| Bootstrap (B2) | ✅ Applied 2026-09-26: state bucket adopted, ECR repositories, task boundary, and the four deploy roles; the second apply was a no-op. All five Environments have their `AWS_ROLE_ARN` |
 | Everything else | ⏳ Not started. The build order is in §10 |
 
 ## 1. Summary
@@ -566,7 +566,7 @@ Each milestone ends working, with its checks passing. Workflow changes go throug
 |---|---|---|---|
 | **B0** | This design, reviewed | Approved; open items 1–2 answered ✅ | Review |
 | **B1** | Workflow foundation: `ci.yml` (actionlint), `test.yml` (`make ci`), the `dev-ci.yml` stub | A push to `dev` runs the test suite on GitHub; **Lint workflows** is required on `main` (ruleset `main-required-checks`) ✅ | — |
-| **B2** | Bootstrap: `infra/project.env`, `infra/bootstrap/` (state bucket import, ECR repositories, deploy roles, task boundary), `ensure-state-bucket.sh`, `bootstrap.yml`, and the manual JSON with its README | `bootstrap.yml apply` succeeds twice (the second is a no-op); state is in S3 | **Yes**: bootstrap role ✅, five Environments ✅; after the first apply, the other four Environments' `AWS_ROLE_ARN` (§5.2) |
+| **B2** | Bootstrap: `infra/project.env`, `infra/bootstrap/` (state bucket import, ECR repositories, deploy roles, task boundary), `ensure-state-bucket.sh`, `bootstrap.yml`, and the manual JSON with its README | `bootstrap.yml apply` succeeds twice (the second is a no-op); state is in S3 ✅ | **Yes**: bootstrap role ✅, five Environments ✅, the other four Environments' `AWS_ROLE_ARN` ✅ (§5.2) |
 | **B3** | Network: `infra/network/`, `terraform.yml` (`target=network`) | VPC, subnets, and endpoints applied through the `shared` Environment | Approve in `shared` |
 | **B4** | Phase A changes (§8): CA bundle, `dbinit` image, `deploy/ecs/` templates, `scripts/deploy/` with tests | `make ci` green; scripts tested against a stubbed AWS CLI | — |
 | **B5** | dev infrastructure: `infra/env/` + `environments/dev.tfvars`, `terraform.yml target=infra` | Cluster, ALB, RDS, secrets, and the zero-task service exist in dev | — |
