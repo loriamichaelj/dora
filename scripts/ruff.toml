@@ -1,6 +1,8 @@
 # Host scripts: standard library only, Python 3.10+ (D58).
 target-version = "py310"
 line-length = 100
+# Top-level scripts and scripts/deploy/ are first-party modules (for import sorting).
+src = [".", "deploy"]
 
 [lint]
 select = ["E", "W", "F", "I", "B", "UP", "SIM", "RUF", "S", "PT"]

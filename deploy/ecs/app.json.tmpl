@@ -1,0 +1,84 @@
+{
+  "family": "${NAME_PREFIX}-${ENVIRONMENT}-app",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "runtimePlatform": { "cpuArchitecture": "ARM64", "operatingSystemFamily": "LINUX" },
+  "cpu": "${CPU}",
+  "memory": "${MEMORY}",
+  "taskRoleArn": "${TASK_ROLE_ARN}",
+  "executionRoleArn": "${EXECUTION_ROLE_ARN}",
+  "containerDefinitions": [
+    {
+      "name": "api",
+      "image": "${API_IMAGE}",
+      "essential": true,
+      "stopTimeout": 30,
+      "environment": [
+        { "name": "APP_ENV", "value": "${ENVIRONMENT}" },
+        { "name": "LOG_LEVEL", "value": "INFO" },
+        { "name": "ENABLE_API_DOCS", "value": "false" },
+        { "name": "PORT", "value": "8000" },
+        { "name": "FORWARDED_ALLOW_IPS", "value": "127.0.0.1" },
+        { "name": "DB_HOST", "value": "${DB_HOST}" },
+        { "name": "DB_PORT", "value": "${DB_PORT}" },
+        { "name": "DB_NAME", "value": "${DB_NAME}" },
+        { "name": "DB_USER", "value": "dora_app" },
+        { "name": "DB_SSL_MODE", "value": "verify-full" },
+        { "name": "DB_SSL_ROOT_CERT", "value": "/etc/ssl/rds/global-bundle.pem" }
+      ],
+      "secrets": [
+        { "name": "DB_PASSWORD", "valueFrom": "${DB_APP_SECRET_ARN}:password::" },
+        { "name": "INGEST_API_KEY", "valueFrom": "${INGEST_API_KEY_SECRET_ARN}" }
+      ],
+      "healthCheck": {
+        "command": [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=2)"
+        ],
+        "interval": 10,
+        "timeout": 5,
+        "retries": 3,
+        "startPeriod": 20
+      },
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "${APP_LOG_GROUP}",
+          "awslogs-region": "${AWS_REGION}",
+          "awslogs-stream-prefix": "api"
+        }
+      }
+    },
+    {
+      "name": "web",
+      "image": "${WEB_IMAGE}",
+      "essential": true,
+      "portMappings": [{ "containerPort": 8080, "protocol": "tcp" }],
+      "environment": [{ "name": "API_UPSTREAM", "value": "127.0.0.1:8000" }],
+      "dependsOn": [{ "containerName": "api", "condition": "HEALTHY" }],
+      "healthCheck": {
+        "command": ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/index.html"],
+        "interval": 10,
+        "timeout": 5,
+        "retries": 3,
+        "startPeriod": 10
+      },
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "${APP_LOG_GROUP}",
+          "awslogs-region": "${AWS_REGION}",
+          "awslogs-stream-prefix": "web"
+        }
+      }
+    }
+  ],
+  "tags": [
+    { "key": "Project", "value": "${NAME_PREFIX}" },
+    { "key": "Environment", "value": "${ENVIRONMENT}" },
+    { "key": "ManagedBy", "value": "deploy" },
+    { "key": "Release", "value": "${RELEASE_VERSION}" }
+  ]
+}

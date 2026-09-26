@@ -39,7 +39,17 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PORT=8000
 
 RUN groupadd --system --gid 10001 app \
- && useradd --system --uid 10001 --gid app --no-create-home --shell /usr/sbin/nologin app
+ && useradd --system --uid 10001 --gid app --no-create-home --shell /usr/sbin/nologin app \
+ && install -d -m 0755 /etc/ssl/rds
+
+# Amazon RDS's CA bundle, so DB_SSL_MODE=verify-full can check the database's
+# certificate on AWS (docs/CLOUD-DEVOPS-DESIGN.md §6.6). Pinned: when AWS
+# changes the bundle the build fails until this checksum is updated, here and
+# in db/Dockerfile. The directory is created above: ADD --chmod would give a
+# directory it creates the file's mode (no execute bit), which the app user
+# couldn't enter.
+ADD --checksum=sha256:e5bb2084ccf45087bda1c9bffdea0eb15ee67f0b91646106e466714f9de3c7e3 --chmod=644 \
+    https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem /etc/ssl/rds/global-bundle.pem
 
 WORKDIR /app
 COPY --from=build /app/.venv /app/.venv

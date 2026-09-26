@@ -101,6 +101,28 @@ services:
         condition: service_healthy
     restart: "no"
 
+  # The dbinit image that bootstraps RDS on every AWS deploy (cloud design
+  # §7.3). `make e2e` runs it against the already-bootstrapped database to
+  # prove the image works and a rerun changes nothing. Never started by `up`.
+  dbinit:
+    profiles: ["dbinit"]
+    build:
+      context: ./db
+      args: *build-args
+    image: dora-dbinit:local
+    environment:
+      PGHOST: db
+      PGUSER: postgres
+      PGPASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      PGDATABASE: dora
+      PGSSLMODE: disable # the local database has no TLS; RDS uses verify-full
+      DORA_OWNER_PASSWORD: ${DORA_OWNER_PASSWORD:?set DORA_OWNER_PASSWORD in .env}
+      DORA_APP_PASSWORD: ${DORA_APP_PASSWORD:?set DORA_APP_PASSWORD in .env}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
   web:
     build:
       context: ./web

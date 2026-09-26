@@ -1,0 +1,42 @@
+{
+  "family": "${NAME_PREFIX}-${ENVIRONMENT}-migrate",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "runtimePlatform": { "cpuArchitecture": "ARM64", "operatingSystemFamily": "LINUX" },
+  "cpu": "256",
+  "memory": "512",
+  "taskRoleArn": "${TASK_ROLE_ARN}",
+  "executionRoleArn": "${EXECUTION_ROLE_ARN}",
+  "containerDefinitions": [
+    {
+      "name": "migrate",
+      "image": "${API_IMAGE}",
+      "essential": true,
+      "command": ["alembic", "upgrade", "head"],
+      "environment": [
+        { "name": "APP_ENV", "value": "${ENVIRONMENT}" },
+        { "name": "DB_HOST", "value": "${DB_HOST}" },
+        { "name": "DB_PORT", "value": "${DB_PORT}" },
+        { "name": "DB_NAME", "value": "${DB_NAME}" },
+        { "name": "DB_USER", "value": "dora_owner" },
+        { "name": "DB_SSL_MODE", "value": "verify-full" },
+        { "name": "DB_SSL_ROOT_CERT", "value": "/etc/ssl/rds/global-bundle.pem" }
+      ],
+      "secrets": [{ "name": "DB_PASSWORD", "valueFrom": "${DB_OWNER_SECRET_ARN}:password::" }],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "${JOBS_LOG_GROUP}",
+          "awslogs-region": "${AWS_REGION}",
+          "awslogs-stream-prefix": "migrate"
+        }
+      }
+    }
+  ],
+  "tags": [
+    { "key": "Project", "value": "${NAME_PREFIX}" },
+    { "key": "Environment", "value": "${ENVIRONMENT}" },
+    { "key": "ManagedBy", "value": "deploy" },
+    { "key": "Release", "value": "${RELEASE_VERSION}" }
+  ]
+}

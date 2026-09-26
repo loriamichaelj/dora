@@ -20,6 +20,7 @@ from typing import Any
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "deploy"))
 
 API_KEY = "test-key-0123456789abcdef0123456789abcd"
 

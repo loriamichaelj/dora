@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Author** | M.L. |
-| **Status** | v0.7: B0–B3 done; next is B4, the Phase A changes (§0, §10). Open items 1–2 resolved. **Dev only: one ECS cluster** |
+| **Status** | v0.8: B0–B4 done; next is B5, dev's infrastructure (§0, §10). Open items 1–2 resolved. **Dev only: one ECS cluster** |
 | **Date** | 2026-09-25 |
 | **Depends on** | [`3T-APP-DESIGN.md`](3T-APP-DESIGN.md) v1.0. Phase A is complete: the app runs and is fully tested on localhost, and it meets the portability constraints in §14 of that document. |
 | **Reference** | Beacon, `~/Code/CloudDevOps/AWS/three-tier-app-ec2/beacon`, [`docs/CLOUD-DEVOPS-DESIGN.md`](https://github.com/loriamichaelj/beacon/blob/dev/docs/CLOUD-DEVOPS-DESIGN.md). Dora follows Beacon's branch, workflow, bootstrap, state, and IAM patterns. The difference is compute: **ECS on Fargate** instead of EC2 instances, an AMI, and S3 tarballs. |
@@ -22,6 +22,7 @@
 | Workflows (B1) | ✅ `ci.yml` and `test.yml` on `main`; the `dev-ci.yml` stub on `dev` runs `make ci` on every push |
 | Bootstrap (B2) | ✅ Applied 2026-09-26: state bucket adopted, ECR repositories, task boundary, and the four deploy roles; the second apply was a no-op. All five Environments have their `AWS_ROLE_ARN` |
 | Network (B3) | ✅ Applied 2026-09-26 through the `shared` Environment: the VPC, dev's and the shared subnets, the S3 gateway endpoint, and the four interface endpoints (23 resources). The first apply hit `VpcLimitExceeded`: the shared account's us-east-1 was at its quota of 5 VPCs, so an unused VPC was deleted first (§6.2) |
+| Phase A changes (B4) | ✅ 2026-09-26: the RDS CA bundle in the `api` image, the `dbinit` image, `deploy/ecs/` templates, `scripts/deploy/` with tests; `make ci` green (§8) |
 | Everything else | ⏳ Not started. The build order is in §10 |
 
 ## 1. Summary
@@ -243,7 +244,7 @@ GITHUB_OIDC_SUB_PREFIX=repo:loriamichaelj@165821667/dora@1387517226
 | Secrets | `loria-dora/<env>/db-owner`, `/db-app`, `/ingest-api-key` (plus the RDS-managed master secret) |
 | SSM parameters | `/loria-dora/<env>/release-version`, `/loria-dora/<env>/deploy-config` |
 | Log groups | `/loria-dora/<env>/app`, `/loria-dora/<env>/jobs` |
-| IAM | `cloudbatch818-loria-dora-<env>-task`, `…-<env>-task-exec` |
+| IAM | `cloudbatch818-loria-dora-<env>-task`, `…-<env>-task-exec`, `…-<env>-db-bootstrap-exec` (C19) |
 
 Every resource is tagged `Project=loria-dora`, `Environment=<env|shared>`, `ManagedBy=terraform`. Tag-based IAM conditions check **both** `Project` and `Environment`, so another project's `Environment=dev` resources are out of reach.
 
@@ -324,7 +325,7 @@ The VPC is shared across environments, so **security groups are the isolation bo
 | Task SG (same env) | RDS SG | 5432 | Only this environment's tasks, including one-off tasks, reach its database |
 | Task SG | Endpoint SG | 443 | Covered by the endpoint SG's VPC-CIDR rule |
 
-`api` listens only on `127.0.0.1` inside the task; there's no rule to port 8000 at all.
+There's no rule to port 8000 at all, so only `web`, inside the same task, can reach `api`. (`api` binds `0.0.0.0`, a Phase A decision (§9 there); the security group, not the bind address, keeps it private.)
 
 ### 6.4 Compute: ECS on Fargate
 
@@ -459,7 +460,7 @@ Steps 1–3 run **only for dev**. Stage and prod never build.
 9. **Publish** the pointer: write `version` to `/loria-dora/<env>/release-version`.
 10. **Smoke tests** against the ALB:
     - **curl:** `/readyz` (with warm-up retries), `/healthz`, `/version` returning this `GIT_SHA`, an API list call, the SPA and a client-side route, and `/metrics` not returning Prometheus output.
-    - **Headless browser:** the dashboard and management pages render with no console, page, or API errors.
+    - **Headless browser:** the dashboard and management pages render with no console, page, or API errors. (Built with `deploy.yml` in B6, reusing the web app's Playwright; the curl checks are `scripts/deploy/smoke_test.py`, built in B4.)
 11. **Self-tracking, finish**: `record_deploy.py --status auto` (§7.6).
 12. **Notify** (§4.5).
 
@@ -538,7 +539,11 @@ These are small and happen in milestone B4, on `dev`, with Phase A's full test s
 
 1. **RDS CA bundle in the `api` image.** Download `global-bundle.pem` from `truststore.pki.rds.amazonaws.com` at build time and pin its SHA-256 in the Dockerfile. `DB_SSL_ROOT_CERT` then points at it.
 2. **`db/Dockerfile`** (the `dbinit` image): `FROM postgres:18.6`, plus `db/bootstrap.sql` and the same CA bundle, running as `postgres`.
-3. **`deploy/ecs/`** templates (app, migrate, db-bootstrap, seed) and **`scripts/deploy/`** (preflight, run-one-off-task, render-and-register, smoke tests, rollback rules), testable locally against a stubbed AWS CLI, as in Beacon.
+3. **`deploy/ecs/`** templates (app, migrate, db-bootstrap, seed) and **`scripts/deploy/`** (preflight, run-one-off-task, render-and-register, smoke tests, rollback rules), testable locally against a stubbed AWS CLI. (Beacon's deploy scripts are untested bash; Dora's are stdlib Python like `record_deploy.py`, C18.)
+**As built (B4, 2026-09-26).** `deploy/ecs/README.md` defines the templates and the `deploy-config` contract `infra/env` must publish. `scripts/deploy/ecs_deploy.py` has the subcommands `version`, `preflight`, `register`, `run-task`, `rollout`, `publish`, and `resolve-rollback`; `smoke_test.py` has the curl checks. Their 45 tests run in `make test-scripts` on Python 3.10, and each safety rule (circuit-breaker detection, "proven", prod = stage) was checked by breaking it and watching a test fail. `make e2e` also reruns the bootstrap with the `dbinit` image, loads the CA bundle as each image's non-root user, and smoke-tests the local stack.
+
+**Found while building it:** `ADD --chmod=644` also gave the directory it created mode 644, which the images' non-root users can't enter. Every `verify-full` connection on RDS would have failed, and no test would have noticed, because the local database has no TLS. The Dockerfiles now create `/etc/ssl/rds` first, and `make e2e` checks the bundle loads.
+
 4. **Nothing else.** The Phase A portability constraints (§14 there) already cover configuration by environment variables, discrete DB settings, TLS modes, pool pre-ping, `/healthz` for liveness, SIGTERM handling, arm64 images, relative `/api`, `/version`, `record_deploy.py`'s CI flags, and `make ci` as the single entry point.
 
 ## 9. Cost (dev only, us-east-1, approximate)
@@ -571,7 +576,7 @@ Each milestone ends working, with its checks passing. Workflow changes go throug
 | **B1** | Workflow foundation: `ci.yml` (actionlint), `test.yml` (`make ci`), the `dev-ci.yml` stub | A push to `dev` runs the test suite on GitHub; **Lint workflows** is required on `main` (ruleset `main-required-checks`) ✅ | — |
 | **B2** | Bootstrap: `infra/project.env`, `infra/bootstrap/` (state bucket import, ECR repositories, deploy roles, task boundary), `ensure-state-bucket.sh`, `bootstrap.yml`, and the manual JSON with its README | `bootstrap.yml apply` succeeds twice (the second is a no-op); state is in S3 ✅ | **Yes**: bootstrap role ✅, five Environments ✅, the other four Environments' `AWS_ROLE_ARN` ✅ (§5.2) |
 | **B3** | Network: `infra/network/`, `terraform.yml` (`target=network`) | VPC, subnets, and endpoints applied through the `shared` Environment ✅ | Approve in `shared` |
-| **B4** | Phase A changes (§8): CA bundle, `dbinit` image, `deploy/ecs/` templates, `scripts/deploy/` with tests | `make ci` green; scripts tested against a stubbed AWS CLI | — |
+| **B4** | Phase A changes (§8): CA bundle, `dbinit` image, `deploy/ecs/` templates, `scripts/deploy/` with tests | `make ci` green; scripts tested against a stubbed AWS CLI ✅ | — |
 | **B5** | dev infrastructure: `infra/env/` + `environments/dev.tfvars`, `terraform.yml target=infra` | Cluster, ALB, RDS, secrets, and the zero-task service exist in dev | — |
 | **B6** | `deploy.yml` + `pipeline-status`: the first dev deploy | Dev serves the app at its ALB URL; smoke tests pass; the second deploy is recorded by the tracker | Create `dora-tracker` in dev's UI once |
 | **B7** | `rollback.yml`, `seed.yml`, `docs/RUNBOOK.md` | Rollback drilled (back and forth); seed loads; runbook written | — |
@@ -621,3 +626,5 @@ Each milestone ends working, with its checks passing. Workflow changes go throug
 | C15 | Each deploy role's permissions are five managed policies by concern: `network` (read-only calls, security groups), `iam` (task roles, service-linked roles), `services` (ALB, RDS, secrets, SSM, logs), `containers` (ECS, ECR), `state` (S3). Sizes are measured offline before any apply | IAM caps a managed policy at 6,144 characters, and an oversized one only fails at apply; the largest is ~2,200 | One large policy per role; inline policies |
 | C16 | The RDS-managed master secret (`rds!db-<uuid>`) is scoped by the `aws:rds:primaryDBInstanceArn` tag RDS puts on it, both in the task boundary and in each deploy role; only its creation is name-scoped | Its name is random, so a name pattern can't tie it to an environment; the tag can | Allowing every `rds!*` secret |
 | C17 | The bootstrap role manages only the state bucket, the ECR repositories, the deploy roles and policies, and the task boundary. It has no ECS, EC2, RDS, or Secrets Manager access | It's the most trusted role (it creates roles), so it holds nothing that runs or reaches data. IAM lets it write policies granting actions it doesn't hold itself | Giving it the deploy roles' permissions too |
+| C18 | Deploy steps are stdlib Python (`scripts/deploy/`), one CLI with a subcommand per step, calling AWS only through the AWS CLI at a single function the tests replace with a fake that keeps state | JSON rendering, parameter history, and rollback rules are clearer and testable in Python; it's the `record_deploy.py` pattern (D58); the fake checks the exact arguments each call sends | Beacon's bash with `jq` (untested); boto3 (a dependency on the runner) |
+| C19 | Two execution roles per environment: `…-task-exec` (app, migrate, seed) and `…-db-bootstrap-exec` (also reads the RDS master secret). One task role with no permissions | Only the one-off bootstrap task ever needs the master password | One execution role that can read every secret |

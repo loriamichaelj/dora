@@ -1,0 +1,43 @@
+{
+  "family": "${NAME_PREFIX}-${ENVIRONMENT}-db-bootstrap",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "runtimePlatform": { "cpuArchitecture": "ARM64", "operatingSystemFamily": "LINUX" },
+  "cpu": "256",
+  "memory": "512",
+  "taskRoleArn": "${TASK_ROLE_ARN}",
+  "executionRoleArn": "${DB_BOOTSTRAP_EXECUTION_ROLE_ARN}",
+  "containerDefinitions": [
+    {
+      "name": "db-bootstrap",
+      "image": "${DBINIT_IMAGE}",
+      "essential": true,
+      "environment": [
+        { "name": "PGHOST", "value": "${DB_HOST}" },
+        { "name": "PGPORT", "value": "${DB_PORT}" },
+        { "name": "PGDATABASE", "value": "${DB_NAME}" },
+        { "name": "PGSSLMODE", "value": "verify-full" }
+      ],
+      "secrets": [
+        { "name": "PGUSER", "valueFrom": "${DB_MASTER_SECRET_ARN}:username::" },
+        { "name": "PGPASSWORD", "valueFrom": "${DB_MASTER_SECRET_ARN}:password::" },
+        { "name": "DORA_OWNER_PASSWORD", "valueFrom": "${DB_OWNER_SECRET_ARN}:password::" },
+        { "name": "DORA_APP_PASSWORD", "valueFrom": "${DB_APP_SECRET_ARN}:password::" }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "${JOBS_LOG_GROUP}",
+          "awslogs-region": "${AWS_REGION}",
+          "awslogs-stream-prefix": "db-bootstrap"
+        }
+      }
+    }
+  ],
+  "tags": [
+    { "key": "Project", "value": "${NAME_PREFIX}" },
+    { "key": "Environment", "value": "${ENVIRONMENT}" },
+    { "key": "ManagedBy", "value": "deploy" },
+    { "key": "Release", "value": "${RELEASE_VERSION}" }
+  ]
+}

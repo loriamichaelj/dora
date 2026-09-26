@@ -74,13 +74,15 @@ dev: check-env ## Hot reload: api --reload, Vite dev server on :5173
 # driver can't build multi-platform images, so use a docker-container builder,
 # created once. --output type=cacheonly builds without loading or pushing.
 MULTIARCH_BUILDER := dora-multiarch
-build-multiarch: ## Build api and web images for linux/amd64 and linux/arm64
+build-multiarch: ## Build the api, web, and dbinit images for linux/amd64 and linux/arm64
 	docker buildx inspect $(MULTIARCH_BUILDER) >/dev/null 2>&1 || \
 		docker buildx create --name $(MULTIARCH_BUILDER) --driver docker-container >/dev/null
 	docker buildx build --builder $(MULTIARCH_BUILDER) --platform linux/amd64,linux/arm64 \
 		--output type=cacheonly ./api
 	docker buildx build --builder $(MULTIARCH_BUILDER) --platform linux/amd64,linux/arm64 \
 		--output type=cacheonly ./web
+	docker buildx build --builder $(MULTIARCH_BUILDER) --platform linux/amd64,linux/arm64 \
+		--output type=cacheonly ./db
 
 # ---- database ----
 
@@ -156,7 +158,7 @@ openapi-check: openapi ## Fail if the committed API contract is out of date
 
 test: test-api test-scripts test-web e2e ## All test suites: api, scripts, web, then E2E
 
-test-scripts: ## record_deploy.py tests on Python 3.10 -> reports/
+test-scripts: ## Host script tests (record_deploy, scripts/deploy) on Python 3.10 -> reports/
 	@mkdir -p $(REPORTS)
 	$(SCRIPTS_PY) --with pytest==9.1.1 pytest scripts/tests -q -p no:cacheprovider \
 		--junitxml=$(REPORTS)/junit-scripts.xml
@@ -188,6 +190,22 @@ e2e: check-node web/node_modules/.package-lock.json e2e-browsers ## Playwright E
 	$(E2E_COMPOSE) exec -T db psql -U postgres -d dora -qc 'ANALYZE'
 	@status=0; \
 		(cd web && E2E_BASE_URL=http://localhost:18080 npx playwright test) || status=$$?; \
+		if [ $$status -eq 0 ]; then \
+			echo "e2e: rerun the db bootstrap with the dbinit image (idempotent: must succeed again)"; \
+			$(E2E_COMPOSE) --profile dbinit run --rm --build dbinit || status=$$?; \
+		fi; \
+		if [ $$status -eq 0 ]; then \
+			echo "e2e: the RDS CA bundle loads as each image's non-root user"; \
+			docker run --rm --entrypoint python dora-api:local -c \
+				"import ssl; ssl.create_default_context(cafile='/etc/ssl/rds/global-bundle.pem')" \
+				|| status=$$?; \
+			docker run --rm --entrypoint sh dora-dbinit:local -c \
+				'openssl x509 -noout -in /etc/ssl/rds/global-bundle.pem' || status=$$?; \
+		fi; \
+		if [ $$status -eq 0 ]; then \
+			python3 scripts/deploy/smoke_test.py --base-url http://localhost:18080 \
+				--git-sha "$(GIT_SHA)" --ready-attempts 5 --ready-delay 2 || status=$$?; \
+		fi; \
 		$(E2E_COMPOSE) down -v --remove-orphans; \
 		exit $$status
 
