@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Author** | M.L. |
-| **Status** | v0.6: B0–B2 done; B3 built, awaiting its first `terraform.yml target=network` apply (§0, §10). Open items 1–2 resolved. **Dev only: one ECS cluster** |
+| **Status** | v0.7: B0–B3 done; next is B4, the Phase A changes (§0, §10). Open items 1–2 resolved. **Dev only: one ECS cluster** |
 | **Date** | 2026-09-25 |
 | **Depends on** | [`3T-APP-DESIGN.md`](3T-APP-DESIGN.md) v1.0. Phase A is complete: the app runs and is fully tested on localhost, and it meets the portability constraints in §14 of that document. |
 | **Reference** | Beacon, `~/Code/CloudDevOps/AWS/three-tier-app-ec2/beacon`, [`docs/CLOUD-DEVOPS-DESIGN.md`](https://github.com/loriamichaelj/beacon/blob/dev/docs/CLOUD-DEVOPS-DESIGN.md). Dora follows Beacon's branch, workflow, bootstrap, state, and IAM patterns. The difference is compute: **ECS on Fargate** instead of EC2 instances, an AMI, and S3 tarballs. |
@@ -21,7 +21,7 @@
 | This design | ✅ Reviewed (B0) |
 | Workflows (B1) | ✅ `ci.yml` and `test.yml` on `main`; the `dev-ci.yml` stub on `dev` runs `make ci` on every push |
 | Bootstrap (B2) | ✅ Applied 2026-09-26: state bucket adopted, ECR repositories, task boundary, and the four deploy roles; the second apply was a no-op. All five Environments have their `AWS_ROLE_ARN` |
-| Network (B3) | 🔨 Built: `infra/network/` and `terraform.yml`. The first apply is next |
+| Network (B3) | ✅ Applied 2026-09-26 through the `shared` Environment: the VPC, dev's and the shared subnets, the S3 gateway endpoint, and the four interface endpoints (23 resources). The first apply hit `VpcLimitExceeded`: the shared account's us-east-1 was at its quota of 5 VPCs, so an unused VPC was deleted first (§6.2) |
 | Everything else | ⏳ Not started. The build order is in §10 |
 
 ## 1. Summary
@@ -309,6 +309,8 @@ Only the **dev** and **shared** subnets are created. The stage and prod ranges a
 
 The interface endpoints live in the shared subnets, with their own security group allowing 443 from the VPC CIDR, the design's only CIDR-based rule. There's deliberately **no** `ssm`/`ssmmessages` endpoint: nothing at runtime reads SSM (the workflows read it from outside the VPC), and ECS Exec is deferred (§11).
 
+**VPC quota.** The shared account's `us-east-1` sits at the default quota of 5 VPCs; one unused VPC was deleted to make room for Dora's. Any further VPC (for example, giving prod its own, §6.11) needs a Service Quotas increase first.
+
 **Consequences.** No SSH or shell into tasks: operational work runs as one-off ECS tasks (§7.3). Nothing at runtime can reach the internet: an app feature that needs an external API would need a NAT gateway or another endpoint first.
 
 ### 6.3 Isolation: security groups
@@ -568,7 +570,7 @@ Each milestone ends working, with its checks passing. Workflow changes go throug
 | **B0** | This design, reviewed | Approved; open items 1–2 answered ✅ | Review |
 | **B1** | Workflow foundation: `ci.yml` (actionlint), `test.yml` (`make ci`), the `dev-ci.yml` stub | A push to `dev` runs the test suite on GitHub; **Lint workflows** is required on `main` (ruleset `main-required-checks`) ✅ | — |
 | **B2** | Bootstrap: `infra/project.env`, `infra/bootstrap/` (state bucket import, ECR repositories, deploy roles, task boundary), `ensure-state-bucket.sh`, `bootstrap.yml`, and the manual JSON with its README | `bootstrap.yml apply` succeeds twice (the second is a no-op); state is in S3 ✅ | **Yes**: bootstrap role ✅, five Environments ✅, the other four Environments' `AWS_ROLE_ARN` ✅ (§5.2) |
-| **B3** | Network: `infra/network/`, `terraform.yml` (`target=network`) | VPC, subnets, and endpoints applied through the `shared` Environment | Approve in `shared` |
+| **B3** | Network: `infra/network/`, `terraform.yml` (`target=network`) | VPC, subnets, and endpoints applied through the `shared` Environment ✅ | Approve in `shared` |
 | **B4** | Phase A changes (§8): CA bundle, `dbinit` image, `deploy/ecs/` templates, `scripts/deploy/` with tests | `make ci` green; scripts tested against a stubbed AWS CLI | — |
 | **B5** | dev infrastructure: `infra/env/` + `environments/dev.tfvars`, `terraform.yml target=infra` | Cluster, ALB, RDS, secrets, and the zero-task service exist in dev | — |
 | **B6** | `deploy.yml` + `pipeline-status`: the first dev deploy | Dev serves the app at its ALB URL; smoke tests pass; the second deploy is recorded by the tracker | Create `dora-tracker` in dev's UI once |
