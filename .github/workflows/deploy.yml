@@ -1,0 +1,420 @@
+name: deploy
+run-name: deploy ${{ inputs.environment || 'dev' }} (${{ inputs.mode || 'deploy' }}, ${{ inputs.ref || github.ref_name }})
+
+# Build once, promote forward (docs/CLOUD-DEVOPS-DESIGN.md §7.2).
+#
+#   prepare  resolve inputs, pin the exact commit, compute the release version
+#            (a hash of the api/, web/, and db/ trees, §7.1)
+#   test     make ci via test.yml                          (dev deploys, validate)
+#   build    build the arm64 images and push them to ECR   (dev deploys only,
+#            and only images not already there)
+#   deploy   preflight -> db bootstrap -> migrations -> roll out -> release
+#            pointer -> smoke tests, with self-tracking around it (§7.6)
+#   notify   open or close the "[<env>] pipeline failure" issue (§4.5)
+#
+# Triggers:
+#   workflow_dispatch  dev only: Actions -> deploy -> Run workflow
+#   workflow_call      from the promote.yml stub on stage/prod once they exist
+#                      (§3.4): mode=validate on PR pushes, deploy on merge.
+#                      The caller passes `secrets: inherit` and grants
+#                      issues: write.
+#
+# Stage and prod never build: they deploy images dev already pushed, and prod
+# only exactly what stage runs (scripts/deploy/ecs_deploy.py preflight).
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch or commit to release to dev"
+        type: string
+        default: dev
+      force:
+        description: "Roll out even if dev already runs this release (replaces its tasks)"
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      environment:
+        description: "dev | stage | prod"
+        type: string
+        required: true
+      mode:
+        description: "deploy | validate (validate changes nothing)"
+        type: string
+        required: true
+      ref:
+        description: "Commit to release; defaults to the triggering commit"
+        type: string
+        required: false
+        default: ""
+      force:
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+  id-token: write
+
+# One deploy per environment at a time; a second one queues.
+concurrency:
+  group: deploy-${{ inputs.environment || 'dev' }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      environment: ${{ steps.resolve.outputs.environment }}
+      mode: ${{ steps.resolve.outputs.mode }}
+      sha: ${{ steps.version.outputs.sha }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Resolve inputs
+        id: resolve
+        env:
+          IN_ENVIRONMENT: ${{ inputs.environment || 'dev' }}
+          IN_MODE: ${{ inputs.mode || 'deploy' }}
+          IN_REF: ${{ inputs.ref }}
+        run: |
+          case "${IN_ENVIRONMENT}" in dev|stage|prod) ;; *) echo "::error::Unknown environment '${IN_ENVIRONMENT}'"; exit 1 ;; esac
+          case "${IN_MODE}" in deploy|validate) ;; *) echo "::error::Unknown mode '${IN_MODE}'"; exit 1 ;; esac
+          {
+            echo "environment=${IN_ENVIRONMENT}"
+            echo "mode=${IN_MODE}"
+            echo "ref=${IN_REF:-${GITHUB_SHA}}"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.resolve.outputs.ref }}
+          persist-credentials: false
+
+      # Later jobs check out this exact commit, so a push to the branch
+      # mid-run can't mix versions.
+      - name: Compute release version
+        id: version
+        run: |
+          version="$(python3 scripts/deploy/ecs_deploy.py version)"
+          sha="$(git rev-parse HEAD)"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+          echo "Release ${version} from ${sha}"
+
+  # The one definition of green (test.yml): the same `make ci` as every push to dev.
+  test:
+    name: Test
+    needs: prepare
+    if: needs.prepare.outputs.environment == 'dev' || needs.prepare.outputs.mode == 'validate'
+    uses: ./.github/workflows/test.yml
+    with:
+      ref: ${{ needs.prepare.outputs.sha }}
+
+  build:
+    name: Build and push images
+    needs: [prepare, test]
+    if: needs.prepare.outputs.environment == 'dev' && needs.prepare.outputs.mode == 'deploy'
+    # Native arm64: Fargate runs ARM64 (C1), with no emulation (§6.5).
+    runs-on: ubuntu-24.04-arm
+    environment: dev
+    timeout-minutes: 30
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      SHA: ${{ needs.prepare.outputs.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          persist-credentials: false
+
+      - name: Load project config
+        run: |
+          while IFS='=' read -r key value; do
+            case "${key}" in ''|'#'*) continue ;; esac
+            echo "${key}=${value}" >> "$GITHUB_ENV"
+          done < infra/project.env
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: deploy-build-${{ github.run_id }}
+          mask-aws-account-id: true
+
+      # Images are immutable and keyed by the release version: unchanged app
+      # code (a docs- or infra-only commit) reuses what's already in ECR, and a
+      # half-finished earlier push only builds what's missing.
+      - name: Build and push missing images
+        run: |
+          registry="$(aws sts get-caller-identity --query Account --output text).dkr.ecr.${AWS_REGION}.amazonaws.com"
+          aws ecr get-login-password | docker login --username AWS --password-stdin "${registry}"
+          app_version="$(sed -n 's/^version = "\(.*\)"/\1/p' api/pyproject.toml)"
+          build_time="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          for image in api web dbinit; do
+            context="${image}"
+            [ "${image}" = dbinit ] && context=db
+            repo="${NAME_PREFIX}/${image}"
+            if aws ecr describe-images --repository-name "${repo}" --image-ids "imageTag=${VERSION}" >/dev/null 2>&1; then
+              echo "${repo}:${VERSION} is already in ECR; not rebuilding."
+              continue
+            fi
+            echo "::group::build ${repo}:${VERSION}"
+            # A plain image manifest: no attestations, so ECR's lifecycle rule
+            # for untagged images can't expire a piece of a release.
+            docker buildx build --platform linux/arm64 --provenance=false --sbom=false \
+              --build-arg "APP_VERSION=${app_version}" \
+              --build-arg "GIT_SHA=${SHA}" \
+              --build-arg "BUILD_TIME=${build_time}" \
+              --tag "${registry}/${repo}:${VERSION}" \
+              --tag "${registry}/${repo}:sha-${SHA}" \
+              --push "${context}"
+            echo "::endgroup::"
+          done
+
+      # Scan on push is on (§6.5): report what it found; it never blocks a deploy.
+      - name: Scan findings
+        if: always()
+        run: |
+          {
+            echo "### Image scan findings (release \`${VERSION}\`)"
+            echo
+            echo "| Image | Findings |"
+            echo "|---|---|"
+            for image in api web dbinit; do
+              repo="${NAME_PREFIX}/${image}"
+              aws ecr wait image-scan-complete --repository-name "${repo}" --image-id "imageTag=${VERSION}" 2>/dev/null || true
+              counts="$(aws ecr describe-image-scan-findings --repository-name "${repo}" --image-id "imageTag=${VERSION}" \
+                --query 'imageScanFindings.findingSeverityCounts' --output json 2>/dev/null || echo null)"
+              echo "| \`${image}\` | $(jq -r 'if . == null or . == {} then "none" else to_entries | map("\(.key): \(.value)") | join(", ") end' <<<"${counts}") |"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    name: ${{ needs.prepare.outputs.mode == 'validate' && 'Validate' || 'Deploy' }} ${{ needs.prepare.outputs.environment }}
+    needs: [prepare, test, build]
+    # test and build are skipped where they don't apply; anything else must pass.
+    if: >-
+      always() &&
+      needs.prepare.result == 'success' &&
+      contains(fromJSON('["success","skipped"]'), needs.test.result) &&
+      contains(fromJSON('["success","skipped"]'), needs.build.result)
+    runs-on: ubuntu-24.04
+    environment:
+      name: ${{ needs.prepare.outputs.environment }}
+      url: ${{ steps.preflight.outputs.url }}
+    timeout-minutes: 45
+    env:
+      ENVIRONMENT: ${{ needs.prepare.outputs.environment }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+      SHA: ${{ needs.prepare.outputs.sha }}
+      MODE: ${{ needs.prepare.outputs.mode }}
+      FORCE: ${{ inputs.force }}
+    steps:
+      # Full history: record_deploy.py records the commits since the last
+      # recorded deploy (§7.6).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Load project config
+        run: |
+          while IFS='=' read -r key value; do
+            case "${key}" in ''|'#'*) continue ;; esac
+            echo "${key}=${value}" >> "$GITHUB_ENV"
+          done < infra/project.env
+          case "${ENVIRONMENT}" in
+            dev) tracker_env=development ;;
+            stage) tracker_env=staging ;;
+            prod) tracker_env=production ;;
+          esac
+          {
+            echo "TRACKER_ENV=${tracker_env}"
+            echo "RELEASE_JSON=${RUNNER_TEMP}/release.json"
+          } >> "$GITHUB_ENV"
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: deploy-${{ github.run_id }}
+          mask-aws-account-id: true
+
+      # The environment's infrastructure and the release's images exist (§7.4).
+      - name: Preflight
+        id: preflight
+        run: |
+          python3 scripts/deploy/ecs_deploy.py preflight --version "${VERSION}" > "${RELEASE_JSON}"
+          params="/${NAME_PREFIX}/${ENVIRONMENT}"
+          config="$(aws ssm get-parameter --name "${params}/deploy-config" --query Parameter.Value --output text)"
+          previous="$(aws ssm get-parameter --name "${params}/release-version" --query Parameter.Value --output text)"
+          {
+            echo "previous=${previous}"
+            echo "url=http://$(jq -r .alb_dns_name <<<"${config}")"
+            echo "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Decide
+        id: decide
+        env:
+          PREVIOUS: ${{ steps.preflight.outputs.previous }}
+        run: |
+          if [ "${MODE}" = "validate" ]; then
+            echo "Validate mode: ${ENVIRONMENT} would go from ${PREVIOUS} to ${VERSION}. Nothing changed."
+            echo "rollout=false" >> "$GITHUB_OUTPUT"
+          elif [ "${PREVIOUS}" = "${VERSION}" ] && [ "${FORCE}" != "true" ]; then
+            echo "::notice::${ENVIRONMENT} already runs ${VERSION}; nothing to deploy (use force to replace its tasks anyway)."
+            echo "rollout=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "rollout=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Self-tracking (§7.6), best effort: it can never fail a deploy. The
+      # first deploy to an empty environment has no tracker yet to record to.
+      - name: Record deploy start
+        id: record_start
+        if: steps.decide.outputs.rollout == 'true'
+        env:
+          URL: ${{ steps.preflight.outputs.url }}
+          STARTED_AT: ${{ steps.preflight.outputs.started_at }}
+        run: |
+          INGEST_API_KEY="$(aws secretsmanager get-secret-value --secret-id "${NAME_PREFIX}/${ENVIRONMENT}/ingest-api-key" --query SecretString --output text)"
+          echo "::add-mask::${INGEST_API_KEY}"
+          export INGEST_API_KEY
+          python3 scripts/record_deploy.py --best-effort --no-ensure-service \
+            --api-url "${URL}" --environment "${TRACKER_ENV}" --started-at "${STARTED_AT}" \
+            --external-id "gha-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${ENVIRONMENT}" \
+            --status in_progress
+
+      # Idempotent (C8): creates the database roles on the first deploy and
+      # changes nothing afterwards.
+      - name: Database bootstrap
+        if: steps.decide.outputs.rollout == 'true'
+        run: |
+          arn="$(python3 scripts/deploy/ecs_deploy.py register --family db-bootstrap --release "${RELEASE_JSON}")"
+          python3 scripts/deploy/ecs_deploy.py run-task --task-definition "${arn}"
+
+      - name: Migrate
+        if: steps.decide.outputs.rollout == 'true'
+        run: |
+          arn="$(python3 scripts/deploy/ecs_deploy.py register --family migrate --release "${RELEASE_JSON}")"
+          python3 scripts/deploy/ecs_deploy.py run-task --task-definition "${arn}"
+
+      # Rolling update; the circuit breaker rolls back by itself if the new
+      # tasks never become healthy, and this step then fails.
+      - name: Roll out
+        if: steps.decide.outputs.rollout == 'true'
+        run: |
+          arn="$(python3 scripts/deploy/ecs_deploy.py register --family app --release "${RELEASE_JSON}")"
+          python3 scripts/deploy/ecs_deploy.py rollout --task-definition "${arn}"
+
+      - name: Publish release pointer
+        if: steps.decide.outputs.rollout == 'true'
+        run: python3 scripts/deploy/ecs_deploy.py publish --version "${VERSION}"
+
+      - name: Smoke test
+        if: steps.decide.outputs.rollout == 'true'
+        env:
+          URL: ${{ steps.preflight.outputs.url }}
+        run: python3 scripts/deploy/smoke_test.py --base-url "${URL}" --git-sha "${SHA}"
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        if: steps.decide.outputs.rollout == 'true'
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      # Headless Chromium: catches browser-only failures the curl checks can't.
+      - name: Browser smoke test
+        if: steps.decide.outputs.rollout == 'true'
+        working-directory: web
+        env:
+          SMOKE_BASE_URL: ${{ steps.preflight.outputs.url }}
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
+          npm run --silent smoke
+
+      # succeeded only if /readyz answers and /version reports this commit;
+      # otherwise failed (record_deploy.py --status auto).
+      - name: Record deploy finish
+        if: always() && steps.record_start.outcome == 'success'
+        env:
+          URL: ${{ steps.preflight.outputs.url }}
+          STARTED_AT: ${{ steps.preflight.outputs.started_at }}
+        run: |
+          INGEST_API_KEY="$(aws secretsmanager get-secret-value --secret-id "${NAME_PREFIX}/${ENVIRONMENT}/ingest-api-key" --query SecretString --output text)"
+          echo "::add-mask::${INGEST_API_KEY}"
+          export INGEST_API_KEY
+          python3 scripts/record_deploy.py --best-effort --no-ensure-service \
+            --api-url "${URL}" --environment "${TRACKER_ENV}" --started-at "${STARTED_AT}" \
+            --external-id "gha-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${ENVIRONMENT}" \
+            --status auto
+
+      - name: Summary
+        if: always()
+        env:
+          PREVIOUS: ${{ steps.preflight.outputs.previous }}
+          URL: ${{ steps.preflight.outputs.url }}
+          OUTCOME: ${{ job.status }}
+        run: |
+          {
+            echo "### ${MODE} ${ENVIRONMENT}: ${OUTCOME}"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Release | \`${VERSION}\` (commit \`${SHA:0:7}\`) |"
+            echo "| Previously running | \`${PREVIOUS:-unknown}\` |"
+            [ -n "${URL}" ] && echo "| URL | ${URL} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # GitHub-only notifications (§4.5): a failed deploy opens or updates the
+  # "[<env>] pipeline failure" issue; the next success closes it. Runs after
+  # every job, so a failed test or build is reported too.
+  notify:
+    name: Notify
+    needs: [prepare, test, build, deploy]
+    if: always() && (needs.prepare.outputs.mode || inputs.mode || 'deploy') == 'deploy'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Overall outcome
+        id: outcome
+        env:
+          PREPARE: ${{ needs.prepare.result }}
+          TEST: ${{ needs.test.result }}
+          BUILD: ${{ needs.build.result }}
+          DEPLOY: ${{ needs.deploy.result }}
+        run: |
+          failed=""
+          for pair in "prepare=${PREPARE}" "test=${TEST}" "build=${BUILD}" "deploy=${DEPLOY}"; do
+            [ "${pair#*=}" = "failure" ] && failed="${failed} ${pair%%=*}"
+          done
+          if [ -n "${failed}" ]; then
+            outcome=failure
+          elif [ "${DEPLOY}" = "success" ]; then
+            outcome=success
+          else
+            outcome="${DEPLOY}"   # cancelled / skipped: no notification
+          fi
+          echo "outcome=${outcome}" >> "$GITHUB_OUTPUT"
+          echo "failed=${failed# }" >> "$GITHUB_OUTPUT"
+          echo "outcome=${outcome} failed=[${failed# }]"
+
+      - uses: loriamichaelj/dora/.github/actions/pipeline-status@main
+        with:
+          environment: ${{ needs.prepare.outputs.environment || inputs.environment || 'dev' }}
+          pipeline: deploy
+          outcome: ${{ steps.outcome.outputs.outcome }}
+          token: ${{ github.token }}
+          details: |
+            - Release: `${{ needs.prepare.outputs.version || 'unknown' }}` (commit `${{ needs.prepare.outputs.sha || 'unknown' }}`)
+            - Failed jobs: ${{ steps.outcome.outputs.failed || 'none' }}

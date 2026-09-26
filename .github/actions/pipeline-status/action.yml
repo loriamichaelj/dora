@@ -1,0 +1,82 @@
+name: pipeline-status
+description: >-
+  GitHub-only notifications for deploys and rollbacks (docs/CLOUD-DEVOPS-DESIGN.md
+  §4.5). A failure opens (or comments on) one issue per environment, titled
+  "[<env>] pipeline failure", labeled pipeline-failure, and assigned to whoever
+  ran the pipeline, so GitHub notifies them outside the Actions tab. The next
+  success comments "recovered" and closes it. Other outcomes do nothing.
+  The calling job needs `issues: write`.
+
+inputs:
+  environment:
+    description: dev | stage | prod
+    required: true
+  pipeline:
+    description: deploy | rollback
+    required: true
+  outcome:
+    description: success | failure | cancelled | skipped
+    required: true
+  details:
+    description: Markdown lines describing the run (release, reason, failed jobs)
+    required: false
+    default: ""
+  token:
+    description: Token with issues:write (normally github.token)
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Update pipeline-failure issue
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        REPO: ${{ github.repository }}
+        ENVIRONMENT: ${{ inputs.environment }}
+        PIPELINE: ${{ inputs.pipeline }}
+        OUTCOME: ${{ inputs.outcome }}
+        DETAILS: ${{ inputs.details }}
+        ACTOR: ${{ github.actor }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      run: |
+        set -euo pipefail
+        label="pipeline-failure"
+        title="[${ENVIRONMENT}] pipeline failure"
+
+        case "${OUTCOME}" in
+          success | failure) ;;
+          *) echo "Outcome '${OUTCOME}': no notification."; exit 0 ;;
+        esac
+
+        gh label create "${label}" --repo "${REPO}" --color B60205 \
+          --description "A deploy or rollback failed; closed automatically by the next success" \
+          --force >/dev/null
+
+        existing="$(gh issue list --repo "${REPO}" --label "${label}" --state open --limit 50 \
+          --json number,title | jq -r --arg t "${title}" '[.[] | select(.title == $t)][0].number // empty')"
+
+        if [ "${OUTCOME}" = "failure" ]; then
+          body="$(printf '**%s %s failed** — [run](%s), started by @%s\n\n%s\n' \
+            "${PIPELINE}" "${ENVIRONMENT}" "${RUN_URL}" "${ACTOR}" "${DETAILS}")"
+          if [ -n "${existing}" ]; then
+            gh issue comment "${existing}" --repo "${REPO}" --body "${body}" >/dev/null
+            echo "Commented on open issue #${existing}"
+          else
+            footer="$(printf '\n---\nThis issue closes automatically when the next %s or rollback of %s succeeds.' "deploy" "${ENVIRONMENT}")"
+            url="$(gh issue create --repo "${REPO}" --title "${title}" --label "${label}" \
+                --assignee "${ACTOR}" --body "${body}${footer}" 2>/dev/null \
+              || gh issue create --repo "${REPO}" --title "${title}" --label "${label}" \
+                --body "${body}${footer}")"
+            echo "Opened ${url}"
+          fi
+          echo "::warning::${PIPELINE} ${ENVIRONMENT} failed; see the '${title}' issue."
+        elif [ -n "${existing}" ]; then
+          gh issue comment "${existing}" --repo "${REPO}" \
+            --body "$(printf '**Recovered:** %s %s succeeded — [run](%s), started by @%s\n\n%s\n' \
+              "${PIPELINE}" "${ENVIRONMENT}" "${RUN_URL}" "${ACTOR}" "${DETAILS}")" >/dev/null
+          gh issue close "${existing}" --repo "${REPO}" --reason completed >/dev/null
+          echo "Closed issue #${existing} (recovered)"
+        else
+          echo "Success; no open failure issue for ${ENVIRONMENT}."
+        fi
