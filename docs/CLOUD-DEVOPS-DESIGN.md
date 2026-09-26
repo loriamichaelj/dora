@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Author** | M.L. |
-| **Status** | Draft v0.1, design only: nothing below is built or provisioned yet (§0) |
+| **Status** | Draft v0.2, design only: nothing below is built or provisioned yet (§0). Open items 1–2 resolved |
 | **Date** | 2026-09-25 |
 | **Depends on** | [`3T-APP-DESIGN.md`](3T-APP-DESIGN.md) v1.0. Phase A is complete: the app runs and is fully tested on localhost, and it meets the portability constraints in §14 of that document. |
 | **Reference** | Beacon, `~/Code/CloudDevOps/AWS/three-tier-app-ec2/beacon`, [`docs/CLOUD-DEVOPS-DESIGN.md`](https://github.com/loriamichaelj/beacon/blob/dev/docs/CLOUD-DEVOPS-DESIGN.md). Dora follows Beacon's branch, workflow, bootstrap, state, and IAM patterns. The difference is compute: **ECS on Fargate** instead of EC2 instances, an AMI, and S3 tarballs. |
@@ -166,7 +166,7 @@ A workflow can't grant itself AWS access, so the first trust has to be created b
 
 **Manual, once (you):**
 
-1. **GitHub OIDC identity provider** (IAM → Identity providers): `https://token.actions.githubusercontent.com`, audience `sts.amazonaws.com`. It exists once per AWS account. If Dora uses the same account as Beacon, it's **already there**; skip this step. Terraform only reads it.
+1. **GitHub OIDC identity provider**: **already exists.** Dora uses the same AWS account as Beacon (open item 1), where this provider was created. Nothing to do; Terraform only reads it.
 2. **The bootstrap role**, `cloudbatch818-loria-dora-bootstrap` (IAM → Roles → Web identity), with:
    - the trust policy from `infra/bootstrap/manual/bootstrap-role-trust.json`, allowing only this repo's `bootstrap` Environment:
      ```json
@@ -561,7 +561,7 @@ Each milestone ends working, with its checks passing. Workflow changes go throug
 
 | # | Milestone | Done when | Manual steps |
 |---|---|---|---|
-| **B0** | This design, reviewed | Approved; open items 1–2 answered | Review |
+| **B0** | This design, reviewed | Approved; open items 1–2 answered ✅ | Review |
 | **B1** | Workflow foundation: `ci.yml` (actionlint), `test.yml` (`make ci`), the `dev-ci.yml` stub | A push to `dev` runs the test suite on GitHub; **Lint workflows** is required on `main` | — |
 | **B2** | Bootstrap: `infra/project.env`, `infra/bootstrap/` (state bucket import, ECR repositories, deploy roles, task boundary), `ensure-state-bucket.sh`, `bootstrap.yml`, and the manual JSON with its README | `bootstrap.yml apply` succeeds twice (the second is a no-op); state is in S3 | **Yes**: bootstrap role, `bootstrap` Environment, then the other four Environments (§5.2) |
 | **B3** | Network: `infra/network/`, `terraform.yml` (`target=network`) | VPC, subnets, and endpoints applied through the `shared` Environment | Approve in `shared` |
@@ -587,8 +587,8 @@ Each milestone ends working, with its checks passing. Workflow changes go throug
 
 ## 12. Open items
 
-1. **AWS account.** Is Dora going into the **same shared account as Beacon**? This design assumes yes: region `us-east-1`, the `cloudbatch818-` IAM prefix rule, and the existing GitHub OIDC provider. If it's a different account, step 1 of §5.2 is needed and the IAM prefix may change.
-2. **Reviewer on the `dev` Environment.** None, as in Beacon, so dev deploys don't wait. Confirm.
+1. ~~**AWS account**~~: resolved 2026-09-25. **Same shared account as Beacon**: region `us-east-1`, the `cloudbatch818-` IAM prefix rule applies, and the GitHub OIDC provider already exists, so step 1 of §5.2 is skipped.
+2. ~~**Reviewer on the `dev` Environment**~~: resolved 2026-09-25. **None**, as in Beacon.
 3. **RDS PostgreSQL 18 minor version.** Pin the newest 18.x RDS offers when B5 is built. It must be 18 for `uuidv7()`.
 4. **Dev cost options:** one-AZ endpoints and/or Fargate Spot (§9). The default here is neither.
 5. **Prod wait timer** on its Environment. Moot until prod exists.
