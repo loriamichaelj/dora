@@ -1,0 +1,78 @@
+name: test
+run-name: test (${{ inputs.ref }})
+
+# The one definition of "the app is green" (docs/CLOUD-DEVOPS-DESIGN.md §4.2):
+# `make ci`, i.e. lint (api, web, scripts), the API contract check, and every
+# test suite: API (against real PostgreSQL via Testcontainers), scripts (on
+# Python 3.10), web, and Playwright E2E in an isolated Compose stack.
+#
+# Reused by:
+#   dev-ci.yml  the trigger stub on dev: every push to dev
+#   deploy.yml  before building a dev release (BOOO B6)
+# and runnable by hand for any branch or commit.
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: "Commit to test"
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch or commit to test"
+        type: string
+        default: dev
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: make ci
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      # uv installs Python itself: 3.13 for the api (api/.python-version) and
+      # 3.10 for the host scripts' tests (D58, D73).
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.12.15"
+          enable-cache: true
+          cache-dependency-glob: api/uv.lock
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: |
+            web/package-lock.json
+            web/tools/openapi/package-lock.json
+
+      # `make e2e` installs Chromium itself, but on a fresh runner it also
+      # needs the browser's system libraries, which only --with-deps provides.
+      - name: Install web dependencies and Chromium
+        working-directory: web
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
+
+      - name: make ci
+        run: make ci
+        env:
+          CI: "true"
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-reports-${{ github.run_attempt }}
+          path: reports/
+          retention-days: 14
+          if-no-files-found: ignore
