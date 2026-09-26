@@ -1,0 +1,129 @@
+name: bootstrap
+run-name: bootstrap ${{ inputs.action }} (${{ inputs.ref }})
+
+# Applies infra/bootstrap (docs/CLOUD-DEVOPS-DESIGN.md §5.2): the state
+# bucket's settings, the ECR repositories, the four deploy roles, and the task
+# permissions boundary. Runs as the manually created bootstrap role, and every
+# run waits for approval in the `bootstrap` Environment. Setup steps are in
+# infra/bootstrap/README.md; region and name prefixes come from
+# infra/project.env on the checked-out ref.
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "plan shows changes; apply makes them"
+        type: choice
+        options: [plan, apply]
+        default: plan
+      ref:
+        description: "Branch whose infra/bootstrap code to run"
+        type: string
+        default: dev
+
+permissions:
+  contents: read
+  id-token: write
+
+# One bootstrap run at a time, and never cancel one mid-apply.
+concurrency:
+  group: bootstrap
+  cancel-in-progress: false
+
+env:
+  STATE_KEY: "env:/shared/bootstrap.tfstate"
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+
+jobs:
+  bootstrap:
+    name: ${{ inputs.action }} (${{ inputs.ref }})
+    runs-on: ubuntu-24.04
+    environment: bootstrap
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: infra/bootstrap
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      # Exports every KEY=value in infra/project.env as KEY and TF_VAR_<key>.
+      - name: Load project config
+        run: |
+          while IFS='=' read -r key value; do
+            case "${key}" in ''|'#'*) continue ;; esac
+            lower="$(printf '%s' "${key}" | tr '[:upper:]' '[:lower:]')"
+            echo "${key}=${value}" >> "$GITHUB_ENV"
+            echo "TF_VAR_${lower}=${value}" >> "$GITHUB_ENV"
+          done < ../project.env
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.16.4
+          terraform_wrapper: false
+
+      - name: Terraform fmt
+        run: terraform fmt -check -diff
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: bootstrap-${{ github.run_id }}
+          # Public repo: keep the account ID out of the logs.
+          mask-aws-account-id: true
+
+      - name: Ensure state bucket
+        id: state
+        run: echo "bucket=$(../../scripts/bootstrap/ensure-state-bucket.sh)" >> "$GITHUB_OUTPUT"
+
+      - name: Terraform init
+        env:
+          STATE_BUCKET: ${{ steps.state.outputs.bucket }}
+        run: |
+          terraform init -lockfile=readonly \
+            -backend-config="bucket=${STATE_BUCKET}" \
+            -backend-config="key=${STATE_KEY}" \
+            -backend-config="region=${AWS_REGION}"
+
+      # Design §4.4: fail rather than run against the wrong state key.
+      - name: Verify backend key
+        run: |
+          key="$(jq -r '.backend.config.key' .terraform/terraform.tfstate)"
+          if [ "${key}" != "${STATE_KEY}" ]; then
+            echo "::error::Backend key is '${key}', expected '${STATE_KEY}'"
+            exit 1
+          fi
+
+      - name: Terraform validate
+        run: terraform validate
+
+      - name: Terraform plan
+        env:
+          TF_VAR_state_bucket: ${{ steps.state.outputs.bucket }}
+        run: terraform plan -out=tfplan
+
+      - name: Terraform apply
+        if: inputs.action == 'apply'
+        run: terraform apply tfplan
+
+      - name: Summary
+        if: inputs.action == 'apply'
+        run: |
+          {
+            echo "### Deploy roles"
+            echo
+            echo "Set each GitHub Environment's \`AWS_ROLE_ARN\` secret to \`arn:aws:iam::<ACCOUNT_ID>:role/<role>\`."
+            echo
+            echo "| Environment | Role |"
+            echo "|---|---|"
+            terraform output -json deploy_role_arns \
+              | jq -r 'to_entries[] | "| `\(.key)` | `\(.value | split("/") | last)` |"'
+            echo
+            echo "### ECR repositories"
+            echo
+            terraform output -json ecr_repositories | jq -r '.[] | "- `\(.)`"'
+          } >> "$GITHUB_STEP_SUMMARY"
