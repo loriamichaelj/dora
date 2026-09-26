@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Author** | M.L. |
-| **Status** | In build v0.16 (BOOO M11 complete) |
+| **Status** | v1.0: Phase A complete (BOOO M0–M11 done; §16 met) |
 | **Date** | 2026-09-25 |
 | **Scope** | Phase A — full stack running end-to-end and tested on localhost via Docker Compose |
 | **Out of scope** | Phase B (AWS, IaC, GitHub Actions CI/CD, container orchestration, SSO) |
@@ -28,6 +28,7 @@
 | v0.14 | M9 decisions (D63–D65) and a revision of D61 (preset windows end at the end of the current minute). Services, Deployments, and Failures pages verified in a real browser, including E2E scenarios 5, 6, and 8. |
 | v0.15 | M10 decisions (D66–D70): isolated E2E stack with its own env file; scenario 10 pending M11; `compose.dev.yaml`; the multi-arch builder; `db` runs as `postgres`. §16 items ticked where verified; self-tracking remains for M11. |
 | v0.16 | M11 decisions (D71–D75): release label format; no-op reruns and side-effect-free dry runs; script lint and tests on Python 3.10; `--repo`; scenario 10 compares commit sets. All ten E2E scenarios pass. |
+| v1.0 | Phase A Definition of Done (§16) met: every item ticked with the evidence recorded beside it. |
 
 ---
 
@@ -848,7 +849,7 @@ If both pass, it posts `succeeded` with `finished_at = now`. If either fails, it
 - [x] Images build for both `linux/amd64` and `linux/arm64` (`docker buildx build --platform linux/amd64,linux/arm64`). `make build-multiarch`.
 - [x] No secrets in git or image layers. Only `.env.example` placeholders and the E2E stack's test-only values are committed; image history and env hold none.
 - [x] `db/bootstrap.sql` is idempotent (run twice → no errors, no changes).
-- [ ] **Self-tracking:** after M11, every `make up` from a clean tree adds a `dora-tracker` deployment in `development` whose `head_sha` matches `/version`. `make e2e` leaves that history untouched.
+- [x] **Self-tracking:** after M11, every `make up` from a clean tree adds a `dora-tracker` deployment in `development` whose `head_sha` matches `/version`. `make e2e` leaves that history untouched. Verified at `b8fe87f`: two `make up` runs recorded two builds whose `head_sha` equals `/version`, `make record-deploy` was a no-op, and a full `make e2e` left them unchanged.
 - [x] The README covers quick start, minimum Docker/Compose versions, architecture summary, Makefile targets, metric definitions (linking to §3), the benchmark disclaimer, and the performance result. It states the tested Docker and Compose versions rather than an unverified minimum.
 
 ---
