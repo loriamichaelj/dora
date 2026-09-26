@@ -24,6 +24,13 @@ __pycache__/
 # Node
 node_modules/
 
+# Terraform (the provider lock file, .terraform.lock.hcl, is committed)
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+
 # OS / editors
 .DS_Store
 .idea/

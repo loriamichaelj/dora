@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Author** | M.L. |
-| **Status** | Draft v0.3, design only: nothing below is built or provisioned yet (§0). Open items 1–2 resolved. **Dev only: one ECS cluster** |
+| **Status** | v0.4: B0–B1 done; B2 built, awaiting its first `bootstrap.yml` apply (§0, §10). Open items 1–2 resolved. **Dev only: one ECS cluster** |
 | **Date** | 2026-09-25 |
 | **Depends on** | [`3T-APP-DESIGN.md`](3T-APP-DESIGN.md) v1.0. Phase A is complete: the app runs and is fully tested on localhost, and it meets the portability constraints in §14 of that document. |
 | **Reference** | Beacon, `~/Code/CloudDevOps/AWS/three-tier-app-ec2/beacon`, [`docs/CLOUD-DEVOPS-DESIGN.md`](https://github.com/loriamichaelj/beacon/blob/dev/docs/CLOUD-DEVOPS-DESIGN.md). Dora follows Beacon's branch, workflow, bootstrap, state, and IAM patterns. The difference is compute: **ECS on Fargate** instead of EC2 instances, an AMI, and S3 tarballs. |
@@ -18,7 +18,9 @@
 |---|---|
 | Branches and protection (§3) | ✅ Done in Phase A setup: `main`, `dev`, `stage`, `prod`; `main`, `stage`, and `prod` accept changes only through pull requests |
 | Scope | **Dev only.** One ECS cluster (`loria-dora-dev`); no stage or prod clusters, databases, load balancers, or subnets. Stage and prod appear in this design so adding them later is configuration, not redesign |
-| This design | 📝 Draft for review |
+| This design | ✅ Reviewed (B0) |
+| Workflows (B1) | ✅ `ci.yml` and `test.yml` on `main`; the `dev-ci.yml` stub on `dev` runs `make ci` on every push |
+| Bootstrap (B2) | 🔨 Built: `infra/bootstrap/`, `bootstrap.yml`, the manual role and five Environments configured. The first apply is next |
 | Everything else | ⏳ Not started. The build order is in §10 |
 
 ## 1. Summary
@@ -176,11 +178,11 @@ A workflow can't grant itself AWS access, so the first trust has to be created b
      ```
      The repository already uses GitHub's **immutable subject** (`owner@owner-id/repo@repo-id`), so a deleted-and-recreated `dora` repo couldn't assume the role.
    - the inline policy from `infra/bootstrap/manual/bootstrap-role-permissions.json`. It can manage only `cloudbatch818-loria-dora-deploy-*` roles and policies, the permissions boundary, the state bucket, and the `loria-dora/*` ECR repositories. Its own name deliberately doesn't match `…-deploy-*`, so it can't modify itself.
-3. **The `bootstrap` GitHub Environment**: required reviewer (you), deployment branches `main`, secret `AWS_ROLE_ARN` = the role's ARN.
+3. **The GitHub Environments** (§5.1): all five, with reviewers and `main`-only deployment branches, and `AWS_ROLE_ARN` on `bootstrap` = the role's ARN. The other four get theirs after the first apply.
 
-**Then `bootstrap.yml` (workflow):** `plan`, then `apply`. It creates everything in §5.4 and the four deploy roles.
+**Then `bootstrap.yml` (workflow):** `plan`, then `apply`. It adopts the state bucket and manages its settings (§5.4), and creates the ECR repositories, the four deploy roles, and the task boundary.
 
-**Manual, once more (you):** create the `shared`, `dev`, `stage`, and `prod` GitHub Environments (§5.1), each with its role ARN as `AWS_ROLE_ARN`. The job summary of `bootstrap.yml` lists the role names, not ARNs: the repo is public, and ARNs contain the account ID.
+**Manual, once more (you):** set the `shared`, `dev`, `stage`, and `prod` Environments' `AWS_ROLE_ARN` secrets to their roles' ARNs. The job summary of `bootstrap.yml` lists the role names, not ARNs: the repo is public, and ARNs contain the account ID.
 
 Both JSON files ship in the repo with `<ACCOUNT_ID>` placeholders, alongside a step-by-step `infra/bootstrap/README.md`, as in Beacon.
 
@@ -564,7 +566,7 @@ Each milestone ends working, with its checks passing. Workflow changes go throug
 |---|---|---|---|
 | **B0** | This design, reviewed | Approved; open items 1–2 answered ✅ | Review |
 | **B1** | Workflow foundation: `ci.yml` (actionlint), `test.yml` (`make ci`), the `dev-ci.yml` stub | A push to `dev` runs the test suite on GitHub; **Lint workflows** is required on `main` (ruleset `main-required-checks`) ✅ | — |
-| **B2** | Bootstrap: `infra/project.env`, `infra/bootstrap/` (state bucket import, ECR repositories, deploy roles, task boundary), `ensure-state-bucket.sh`, `bootstrap.yml`, and the manual JSON with its README | `bootstrap.yml apply` succeeds twice (the second is a no-op); state is in S3 | **Yes**: bootstrap role, `bootstrap` Environment, then the other four Environments (§5.2) |
+| **B2** | Bootstrap: `infra/project.env`, `infra/bootstrap/` (state bucket import, ECR repositories, deploy roles, task boundary), `ensure-state-bucket.sh`, `bootstrap.yml`, and the manual JSON with its README | `bootstrap.yml apply` succeeds twice (the second is a no-op); state is in S3 | **Yes**: bootstrap role ✅, five Environments ✅; after the first apply, the other four Environments' `AWS_ROLE_ARN` (§5.2) |
 | **B3** | Network: `infra/network/`, `terraform.yml` (`target=network`) | VPC, subnets, and endpoints applied through the `shared` Environment | Approve in `shared` |
 | **B4** | Phase A changes (§8): CA bundle, `dbinit` image, `deploy/ecs/` templates, `scripts/deploy/` with tests | `make ci` green; scripts tested against a stubbed AWS CLI | — |
 | **B5** | dev infrastructure: `infra/env/` + `environments/dev.tfvars`, `terraform.yml target=infra` | Cluster, ALB, RDS, secrets, and the zero-task service exist in dev | — |
@@ -613,3 +615,6 @@ Each milestone ends working, with its checks passing. Workflow changes go throug
 | C12 | Release `version` is a hash of the `api/`, `web/`, and `db/` Git trees | Survives promotion merges; infra- and docs-only changes don't rebuild | Commit SHA |
 | C13 | The deploy pipeline self-records through `record_deploy.py` with `--best-effort` | Phase A §15.6: one code path; recording never breaks a deploy | Recording from inside the cluster |
 | C14 | **Only dev is built and deployed: one ECS cluster (`loria-dora-dev`), one database, one ALB, and only dev's and the shared subnets.** Stage and prod exist as GitHub Environments, deploy roles, and branch protection only, with no AWS infrastructure | Cost; every mechanism is proven in dev first, as Beacon did | Provisioning all three now |
+| C15 | Each deploy role's permissions are five managed policies by concern: `network` (read-only calls, security groups), `iam` (task roles, service-linked roles), `services` (ALB, RDS, secrets, SSM, logs), `containers` (ECS, ECR), `state` (S3). Sizes are measured offline before any apply | IAM caps a managed policy at 6,144 characters, and an oversized one only fails at apply; the largest is ~2,200 | One large policy per role; inline policies |
+| C16 | The RDS-managed master secret (`rds!db-<uuid>`) is scoped by the `aws:rds:primaryDBInstanceArn` tag RDS puts on it, both in the task boundary and in each deploy role; only its creation is name-scoped | Its name is random, so a name pattern can't tie it to an environment; the tag can | Allowing every `rds!*` secret |
+| C17 | The bootstrap role manages only the state bucket, the ECR repositories, the deploy roles and policies, and the task boundary. It has no ECS, EC2, RDS, or Secrets Manager access | It's the most trusted role (it creates roles), so it holds nothing that runs or reaches data. IAM lets it write policies granting actions it doesn't hold itself | Giving it the deploy roles' permissions too |
