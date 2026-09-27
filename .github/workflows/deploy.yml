@@ -378,6 +378,53 @@ jobs:
             [ -n "${URL}" ] && echo "| URL | ${URL} |"
           } >> "$GITHUB_STEP_SUMMARY"
 
+  # Releases on GitHub: the first time a release deploys to dev, tag its commit
+  # release-<version> and publish a pre-release (it has only reached dev).
+  # Later deploys of the same release (forced redeploys, docs-only commits)
+  # find it and change nothing. Rollback targets can be given as these tags.
+  release:
+    name: GitHub release
+    needs: [prepare, deploy]
+    if: needs.prepare.outputs.environment == 'dev' && needs.prepare.outputs.mode == 'deploy'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      SHA: ${{ needs.prepare.outputs.sha }}
+      GH_TOKEN: ${{ github.token }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          persist-credentials: false
+
+      - name: Tag and publish the release
+        run: |
+          tag="release-${VERSION}"
+          if gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "${tag} is already published; nothing to do."
+            exit 0
+          fi
+          app_version="$(sed -n 's/^version = "\(.*\)"/\1/p' api/pyproject.toml)"
+          notes="$(cat <<EOF
+          | | |
+          |---|---|
+          | Release version | \`${VERSION}\` (hash of the \`api/\`, \`web/\`, and \`db/\` trees, design §7.1) |
+          | App version | \`${app_version}\` |
+          | Commit | ${SHA} |
+          | Images (ECR) | \`loria-dora/api\`, \`loria-dora/web\`, \`loria-dora/dbinit\`, each tagged \`${VERSION}\` and \`sha-${SHA}\` |
+          | First deployed | dev, $(date -u +%Y-%m-%d), [deploy run](${RUN_URL}) |
+
+          Marked pre-release while it has only reached dev.
+          EOF
+          )"
+          gh release create "${tag}" --repo "${GITHUB_REPOSITORY}" --target "${SHA}" \
+            --prerelease --title "${app_version} · ${VERSION}" --notes "${notes}"
+          echo "### Published [${tag}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/${tag})" >> "$GITHUB_STEP_SUMMARY"
+
   # GitHub-only notifications (§4.5): a failed deploy opens or updates the
   # "[<env>] pipeline failure" issue; the next success closes it. Runs after
   # every job, so a failed test or build is reported too.

@@ -1,0 +1,270 @@
+name: rollback
+run-name: >-
+  ${{ inputs.dry_run && 'dry-run ' || '' }}rollback ${{ inputs.environment }} to
+  ${{ inputs.target == 'previous' && 'the previous release' || inputs.target }}
+
+# Roll an environment back to an earlier release (docs/CLOUD-DEVOPS-DESIGN.md
+# §4.3, §7.5): its images, its task-definition template, a rolling update,
+# the release pointer, smoke tests.
+#
+# Target: `previous` (the release that ran before the current one), a release
+# version, its GitHub tag (release-<version>), or a full commit SHA.
+#
+# Rules, all checked by `ecs_deploy.py resolve-rollback` before anything
+# changes:
+#   published  the target's images are in ECR
+#   proven     it has run in this environment before (override: allow_unproven,
+#              dev only)
+#   schema     if the migrations differ between the running release and the
+#              target, the target must be the previous release (override:
+#              allow_schema_change)
+# A reason is required and recorded with who ran it; dry_run checks everything
+# and changes nothing.
+#
+# Also: dispatch-only, with no PR (during an incident a PR cycle is a cost, not
+# a safeguard), gated by the Environment's required reviewer on stage and prod.
+# Never runs migrations. Shares the deploy queue. If the new tasks never become
+# healthy, the circuit breaker returns the service to the running release and
+# the pointer is never moved.
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment to roll back"
+        type: choice
+        options: [dev, stage, prod]
+        default: dev
+      reason:
+        description: "Why (required; recorded in the run summary)"
+        type: string
+        required: true
+      target:
+        description: "previous, a release version, release-<version>, or a full commit SHA"
+        type: string
+        default: previous
+      dry_run:
+        description: "Only check the rules and show what would happen"
+        type: boolean
+        default: false
+      allow_schema_change:
+        description: "Override: allow a target older than the previous release across a migration change"
+        type: boolean
+        default: false
+      allow_unproven:
+        description: "Override (dev only): allow a target that never ran in this environment"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write
+
+# Shares the deploy queue: never runs alongside a deploy to the same environment.
+concurrency:
+  group: deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  rollback:
+    name: ${{ inputs.dry_run && 'Dry-run rollback' || 'Roll back' }} ${{ inputs.environment }}
+    runs-on: ubuntu-24.04
+    environment:
+      name: ${{ inputs.environment }}
+      url: ${{ steps.resolve.outputs.url }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+      issues: write # pipeline-failure notifications
+    env:
+      ENVIRONMENT: ${{ inputs.environment }}
+      REASON: ${{ inputs.reason }}
+      TARGET: ${{ inputs.target }}
+      DRY_RUN: ${{ inputs.dry_run }}
+    steps:
+      - name: Check inputs
+        run: |
+          if [ -z "$(printf '%s' "${REASON}" | tr -d '[:space:]')" ]; then
+            echo "::error::A reason is required."
+            exit 1
+          fi
+
+      # The environment's branch, with full history: the SHA lookup and the
+      # schema comparison need every commit.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.environment }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Load project config
+        run: |
+          while IFS='=' read -r key value; do
+            case "${key}" in ''|'#'*) continue ;; esac
+            echo "${key}=${value}" >> "$GITHUB_ENV"
+          done < infra/project.env
+          case "${ENVIRONMENT}" in
+            dev) tracker_env=development ;;
+            stage) tracker_env=staging ;;
+            prod) tracker_env=production ;;
+          esac
+          {
+            echo "TRACKER_ENV=${tracker_env}"
+            echo "RELEASE_JSON=${RUNNER_TEMP}/release.json"
+            echo "TARGET_DIR=${RUNNER_TEMP}/target"
+          } >> "$GITHUB_ENV"
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: rollback-${{ github.run_id }}
+          mask-aws-account-id: true
+
+      - name: Check rollback rules
+        id: resolve
+        env:
+          ALLOW_SCHEMA_CHANGE: ${{ inputs.allow_schema_change }}
+          ALLOW_UNPROVEN: ${{ inputs.allow_unproven }}
+        run: |
+          args=(resolve-rollback --target "${TARGET}" --reason "${REASON}")
+          [ "${ALLOW_SCHEMA_CHANGE}" = "true" ] && args+=(--allow-schema-change)
+          [ "${ALLOW_UNPROVEN}" = "true" ] && args+=(--allow-unproven)
+          python3 scripts/deploy/ecs_deploy.py "${args[@]}" > "${RELEASE_JSON}"
+          config="$(aws ssm get-parameter --name "/${NAME_PREFIX}/${ENVIRONMENT}/deploy-config" --query Parameter.Value --output text)"
+          {
+            echo "version=$(jq -r .version "${RELEASE_JSON}")"
+            echo "from=$(jq -r .from "${RELEASE_JSON}")"
+            echo "commit=$(jq -r .commit "${RELEASE_JSON}")"
+            echo "url=http://$(jq -r .alb_dns_name <<<"${config}")"
+            echo "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } >> "$GITHUB_OUTPUT"
+          if [ "${DRY_RUN}" = "true" ]; then
+            echo "::notice::Dry run: every rule passed. ${ENVIRONMENT} would roll back from $(jq -r .from "${RELEASE_JSON}") to $(jq -r .version "${RELEASE_JSON}"). Nothing changed."
+          fi
+
+      # The target's own commit supplies its task-definition template (a
+      # rollback runs exactly what that release ran), its app version, and its
+      # browser smoke test.
+      - name: Check out the target release
+        if: inputs.dry_run == false
+        env:
+          COMMIT: ${{ steps.resolve.outputs.commit }}
+        run: |
+          git worktree add --detach "${TARGET_DIR}" "${COMMIT}"
+          echo "APP_VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' "${TARGET_DIR}/api/pyproject.toml")" >> "$GITHUB_ENV"
+
+      # A rollback is an unplanned fix, so it's recorded as a remediation
+      # deployment (Phase A §8, rework rate). Best effort, as in deploy.yml.
+      - name: Record rollback start
+        id: record_start
+        if: inputs.dry_run == false
+        env:
+          URL: ${{ steps.resolve.outputs.url }}
+          STARTED_AT: ${{ steps.resolve.outputs.started_at }}
+        run: |
+          INGEST_API_KEY="$(aws secretsmanager get-secret-value --secret-id "${NAME_PREFIX}/${ENVIRONMENT}/ingest-api-key" --query SecretString --output text)"
+          echo "::add-mask::${INGEST_API_KEY}"
+          export INGEST_API_KEY
+          python3 scripts/record_deploy.py --best-effort --no-ensure-service \
+            --repo "${TARGET_DIR}" --api-url "${URL}" --environment "${TRACKER_ENV}" \
+            --started-at "${STARTED_AT}" --kind remediation \
+            --external-id "gha-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${ENVIRONMENT}-rollback" \
+            --status in_progress
+
+      - name: Roll out
+        if: inputs.dry_run == false
+        run: |
+          arn="$(python3 "${TARGET_DIR}/scripts/deploy/ecs_deploy.py" register --family app --release "${RELEASE_JSON}")"
+          python3 scripts/deploy/ecs_deploy.py rollout --task-definition "${arn}"
+
+      - name: Publish release pointer
+        if: inputs.dry_run == false
+        env:
+          VERSION: ${{ steps.resolve.outputs.version }}
+        run: python3 scripts/deploy/ecs_deploy.py publish --version "${VERSION}"
+
+      - name: Smoke test
+        if: inputs.dry_run == false
+        env:
+          URL: ${{ steps.resolve.outputs.url }}
+          COMMIT: ${{ steps.resolve.outputs.commit }}
+        run: python3 scripts/deploy/smoke_test.py --base-url "${URL}" --git-sha "${COMMIT}"
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        if: inputs.dry_run == false
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      # The target release's own browser smoke test, against its own UI.
+      - name: Browser smoke test
+        if: inputs.dry_run == false
+        working-directory: ${{ env.TARGET_DIR }}/web
+        env:
+          SMOKE_BASE_URL: ${{ steps.resolve.outputs.url }}
+        run: |
+          if [ ! -f e2e/deployed.smoke.ts ]; then
+            echo "::notice::This release predates the browser smoke test; skipped."
+            exit 0
+          fi
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
+          npm run --silent smoke
+
+      - name: Record rollback finish
+        if: always() && steps.record_start.outcome == 'success'
+        env:
+          URL: ${{ steps.resolve.outputs.url }}
+          STARTED_AT: ${{ steps.resolve.outputs.started_at }}
+        run: |
+          INGEST_API_KEY="$(aws secretsmanager get-secret-value --secret-id "${NAME_PREFIX}/${ENVIRONMENT}/ingest-api-key" --query SecretString --output text)"
+          echo "::add-mask::${INGEST_API_KEY}"
+          export INGEST_API_KEY
+          python3 scripts/record_deploy.py --best-effort --no-ensure-service \
+            --repo "${TARGET_DIR}" --api-url "${URL}" --environment "${TRACKER_ENV}" \
+            --started-at "${STARTED_AT}" --kind remediation \
+            --external-id "gha-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${ENVIRONMENT}-rollback" \
+            --status auto
+
+      - name: Summary
+        if: always()
+        env:
+          FROM: ${{ steps.resolve.outputs.from }}
+          VERSION: ${{ steps.resolve.outputs.version }}
+          COMMIT: ${{ steps.resolve.outputs.commit }}
+          URL: ${{ steps.resolve.outputs.url }}
+          OUTCOME: ${{ job.status }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          if [ "${DRY_RUN}" = "true" ]; then
+            title="dry-run rollback ${ENVIRONMENT}: ${OUTCOME} (nothing changed)"
+          else
+            title="rollback ${ENVIRONMENT}: ${OUTCOME}"
+          fi
+          {
+            echo "### ${title}"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| From | \`${FROM:-unknown}\` |"
+            echo "| To | \`${VERSION:-unresolved}\` (commit \`${COMMIT:0:7}\`) |"
+            echo "| Requested by | @${ACTOR} |"
+            echo "| Reason | ${REASON//|/\\|} |"
+            [ -n "${URL}" ] && echo "| URL | ${URL} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # GitHub-only notifications (§4.5). Dry runs never notify: a rule
+      # rejecting a target there is the check working, not an incident.
+      - uses: loriamichaelj/dora/.github/actions/pipeline-status@main
+        if: always() && inputs.dry_run == false
+        with:
+          environment: ${{ inputs.environment }}
+          pipeline: rollback
+          outcome: ${{ job.status }}
+          token: ${{ github.token }}
+          details: |
+            - From `${{ steps.resolve.outputs.from || 'unknown' }}` to `${{ steps.resolve.outputs.version || 'unresolved' }}`
+            - Reason: ${{ inputs.reason }}
