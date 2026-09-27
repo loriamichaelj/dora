@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Author** | M.L. |
-| **Status** | v0.11: B0–B5 done; B6 built, awaiting the first dev deploy (§0, §10). Open items 1–2 resolved. **Dev only: one ECS cluster** |
+| **Status** | v0.12: B0–B6 done; dev serves the app. Next is B7, rollback, seed, and the runbook (§0, §10). Open items 1–2 resolved. **Dev only: one ECS cluster** |
 | **Date** | 2026-09-25 |
 | **Depends on** | [`3T-APP-DESIGN.md`](3T-APP-DESIGN.md) v1.0. Phase A is complete: the app runs and is fully tested on localhost, and it meets the portability constraints in §14 of that document. |
 | **Reference** | Beacon, `~/Code/CloudDevOps/AWS/three-tier-app-ec2/beacon`, [`docs/CLOUD-DEVOPS-DESIGN.md`](https://github.com/loriamichaelj/beacon/blob/dev/docs/CLOUD-DEVOPS-DESIGN.md). Dora follows Beacon's branch, workflow, bootstrap, state, and IAM patterns. The difference is compute: **ECS on Fargate** instead of EC2 instances, an AMI, and S3 tarballs. |
@@ -24,7 +24,7 @@
 | Network (B3) | ✅ Applied 2026-09-26 through the `shared` Environment: the VPC, dev's and the shared subnets, the S3 gateway endpoint, and the four interface endpoints (23 resources). The first apply hit `VpcLimitExceeded`: the shared account's us-east-1 was at its quota of 5 VPCs, so an unused VPC was deleted first (§6.2) |
 | Phase A changes (B4) | ✅ 2026-09-26: the RDS CA bundle in the `api` image, the `dbinit` image, `deploy/ecs/` templates, `scripts/deploy/` with tests; `make ci` green (§8) |
 | Dev infrastructure (B5) | ✅ Applied 2026-09-26 as `deploy-dev` (34 resources; RDS took 9.5 minutes): the ALB, the `loria-dora-dev` cluster and the service at 0 tasks, RDS PostgreSQL 18.3, the secrets, the task roles, the log groups, and `deploy-config`. The ALB answers 503 until the first deploy |
-| First deploy (B6) | 🔨 Built: `deploy.yml`, the `pipeline-status` action, and the browser smoke test. The first dev deploy is next |
+| First deploy (B6) | ✅ 2026-09-27: release `1ea500270995` deployed to dev (db bootstrap over `verify-full`, migration 0001, rollout, curl and browser smoke tests). The first attempt's tests failed on a Docker Hub connection reset; `pipeline-status` opened issue #5 and the passing rerun closed it. A forced second deploy rebuilt nothing and recorded itself in dev's tracker as a succeeded development deployment. Follow-ups in PR #6: pre-pull CI images with retries, the skipped deploy job's name, and `APP_VERSION` in recorded release labels |
 | Everything else | ⏳ Not started. The build order is in §10 |
 
 ## 1. Summary
@@ -580,7 +580,7 @@ Each milestone ends working, with its checks passing. Workflow changes go throug
 | **B3** | Network: `infra/network/`, `terraform.yml` (`target=network`) | VPC, subnets, and endpoints applied through the `shared` Environment ✅ | Approve in `shared` |
 | **B4** | Phase A changes (§8): CA bundle, `dbinit` image, `deploy/ecs/` templates, `scripts/deploy/` with tests | `make ci` green; scripts tested against a stubbed AWS CLI ✅ | — |
 | **B5** | dev infrastructure: `infra/env/` + `environments/dev.tfvars`, `terraform.yml target=infra` | Cluster, ALB, RDS, secrets, and the zero-task service exist in dev ✅ | — |
-| **B6** | `deploy.yml` + `pipeline-status`: the first dev deploy | Dev serves the app at its ALB URL; smoke tests pass; the second deploy is recorded by the tracker | Create `dora-tracker` in dev's UI once |
+| **B6** | `deploy.yml` + `pipeline-status`: the first dev deploy | Dev serves the app at its ALB URL; smoke tests pass; the second deploy is recorded by the tracker ✅ | Create `dora-tracker` in dev's UI once ✅ |
 | **B7** | `rollback.yml`, `seed.yml`, `docs/RUNBOOK.md` | Rollback drilled (back and forth); seed loads; runbook written | — |
 | **B8** | Cost and resilience drills: tear dev down and rebuild it from scratch | Rebuilt with no manual steps beyond approvals; costs recorded | — |
 
