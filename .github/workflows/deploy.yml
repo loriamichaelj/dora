@@ -193,7 +193,9 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   deploy:
-    name: ${{ needs.prepare.outputs.mode == 'validate' && 'Validate' || 'Deploy' }} ${{ needs.prepare.outputs.environment }}
+    # From inputs, not needs: a skipped job never gets needs outputs, and its
+    # name would show the raw expression.
+    name: ${{ inputs.mode == 'validate' && 'Validate' || 'Deploy' }} ${{ inputs.environment || 'dev' }}
     needs: [prepare, test, build]
     # test and build are skipped where they don't apply; anything else must pass.
     if: >-
