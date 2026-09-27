@@ -135,4 +135,52 @@ and RDS. To stop paying for it:
 2. Then, only once no environment is left, `terraform.yml -f target=network -f action=destroy` (−~$58).
 
 Rebuild in the opposite order: network, then infra, then deploy (the service comes up at
-zero tasks and the first deploy scales it). B8 drills this end to end.
+zero tasks and the first deploy scales it). The next section is the full drill.
+
+## Tear down and rebuild dev
+
+The B8 drill (design §10.1): prove dev comes back from nothing, from code alone.
+**Planned, not yet run;** it waits on design open items 7–10 (the database's data, the
+network's scope, self-tracking, cost reporting). Decide those first.
+
+**Before you start:**
+
+- If dev's data matters (open item 7), save it first: the database is deleted with no snapshot.
+- If the network is included (open item 8), make sure there's room for a VPC: the account is at
+  its quota of 5 in us-east-1.
+- Note the current release: `gh release list --repo loriamichaelj/dora` (the newest is running).
+
+**1. Tear down** (infra first; the network only once no environment uses it):
+
+```sh
+gh workflow run terraform.yml --repo loriamichaelj/dora --ref main -f target=infra -f environment=dev -f action=plan
+gh workflow run terraform.yml --repo loriamichaelj/dora --ref main -f target=infra -f environment=dev -f action=destroy
+gh workflow run terraform.yml --repo loriamichaelj/dora --ref main -f target=network -f action=destroy   # approve in shared
+```
+
+Check: each run's summary shows "Plan: 0 to add, 0 to change, N to destroy" and the log ends
+with "Destroy complete". The app URL stops answering.
+
+**2. Rebuild:**
+
+```sh
+gh workflow run terraform.yml --repo loriamichaelj/dora --ref main -f target=network -f action=apply   # approve in shared
+gh workflow run terraform.yml --repo loriamichaelj/dora --ref main -f target=infra -f environment=dev -f action=apply
+gh workflow run deploy.yml --repo loriamichaelj/dora --ref main -f ref=dev
+```
+
+**3. Check:**
+
+- The deploy's build job says each image **is already in ECR; not rebuilding**, and the
+  rollout, smoke tests, and browser smoke tests pass.
+- The infra run's `alb_url` output is the new URL: update "What's where" above.
+- A second `apply` of the network and of infra each reports **No changes**.
+- The app's footer shows the release's commit.
+
+**4. Afterwards:**
+
+- Dev's database is new and empty. Create `dora-tracker` in the UI (unless open item 9 automated
+  it), and run `seed.yml` if you want the demo data back.
+- The rollback history started over: a rollback to a release from before the drill needs
+  `-f allow_unproven=true`.
+- Record the teardown and rebuild times and dev's cost (open item 10) in design §10.1.
