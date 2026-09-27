@@ -208,6 +208,11 @@ jobs:
       name: ${{ needs.prepare.outputs.environment }}
       url: ${{ steps.preflight.outputs.url }}
     timeout-minutes: 45
+    outputs:
+      # The commit the release's images were built from (their sha-<commit>
+      # tag in ECR), which a redeploy from a later, tree-identical commit
+      # doesn't change.
+      build_commit: ${{ steps.preflight.outputs.build_commit }}
     env:
       ENVIRONMENT: ${{ needs.prepare.outputs.environment }}
       VERSION: ${{ needs.prepare.outputs.version }}
@@ -259,6 +264,7 @@ jobs:
           previous="$(aws ssm get-parameter --name "${params}/release-version" --query Parameter.Value --output text)"
           {
             echo "previous=${previous}"
+            echo "build_commit=$(jq -r '.commit // empty' "${RELEASE_JSON}")"
             echo "url=http://$(jq -r .alb_dns_name <<<"${config}")"
             echo "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           } >> "$GITHUB_OUTPUT"
@@ -392,13 +398,15 @@ jobs:
       contents: write
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
-      SHA: ${{ needs.prepare.outputs.sha }}
+      # The images' build commit; this deploy's own commit only if ECR has no
+      # sha-<commit> tag for them.
+      SHA: ${{ needs.deploy.outputs.build_commit || needs.prepare.outputs.sha }}
       GH_TOKEN: ${{ github.token }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.prepare.outputs.sha }}
+          ref: ${{ needs.deploy.outputs.build_commit || needs.prepare.outputs.sha }}
           persist-credentials: false
 
       - name: Tag and publish the release
