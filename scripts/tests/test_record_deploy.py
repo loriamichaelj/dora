@@ -70,6 +70,27 @@ def test_a_rebuild_of_the_same_head_records_no_commits(tracker: FakeTracker, rep
     assert recorded(tracker)[-1]["commits"] == []
 
 
+def test_a_rollback_to_an_older_commit_records_no_commits(
+    tracker: FakeTracker, repo: Repo, capsys: pytest.CaptureFixture[str]
+) -> None:
+    old = repo.head()
+    build(tracker, repo)
+    run(tracker, repo)
+    repo.commit("feat: newer")
+    build(tracker, repo, "2026-09-25T13:00:00Z")
+    run(tracker, repo)
+    recorded(tracker)[-1]["finished_at"] = "2099-01-01T00:00:00Z"  # the latest build
+    repo.git("checkout", "-q", old)  # roll back: deploy the older commit again
+    build(tracker, repo, "2026-09-25T14:00:00Z")
+
+    assert run(tracker, repo) == 0
+    out = capsys.readouterr().out
+    assert "older than the last recorded build" in out
+    assert "history was rewritten" not in out
+    assert recorded(tracker)[-1]["head_sha"] == old
+    assert recorded(tracker)[-1]["commits"] == []
+
+
 def test_rewritten_history_falls_back_to_commits_since_the_last_build(
     tracker: FakeTracker, repo: Repo, capsys: pytest.CaptureFixture[str]
 ) -> None:

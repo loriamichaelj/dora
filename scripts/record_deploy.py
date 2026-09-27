@@ -260,6 +260,10 @@ def choose_commits(
     last_sha = str(last["head_sha"])
     if git.has_commit(last_sha) and git.run("rev-parse", last_sha).stdout.strip() == head:
         return [], ["HEAD is unchanged since the last recorded build: recording a rebuild"]
+    if git.has_commit(last_sha) and git.is_ancestor(head, last_sha):
+        # HEAD is older than what was last recorded: a rollback. It ships no
+        # commits that weren't already deployed.
+        return [], [f"HEAD is older than the last recorded build ({last_sha[:12]}): a rollback"]
     if git.has_commit(last_sha) and git.is_ancestor(last_sha, head):
         commits, truncated = git.log(f"{last_sha}..{head}")
         notes = [f"recording {len(commits)} commit(s) since {last_sha[:12]}"]

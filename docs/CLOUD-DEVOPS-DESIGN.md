@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Author** | M.L. |
-| **Status** | v0.13: B0–B6 done; dev serves the app. B7 built: rollback, seed, runbook, and GitHub releases; the rollback drill is next (§0, §10). Open items 1–2 resolved. **Dev only: one ECS cluster** |
+| **Status** | v0.14: B0–B7 done; dev serves the app, rolls back, and tracks its releases. Next is B8, the teardown and rebuild drill (§0, §10). Open items 1–2 resolved. **Dev only: one ECS cluster** |
 | **Date** | 2026-09-25 |
 | **Depends on** | [`3T-APP-DESIGN.md`](3T-APP-DESIGN.md) v1.0. Phase A is complete: the app runs and is fully tested on localhost, and it meets the portability constraints in §14 of that document. |
 | **Reference** | Beacon, `~/Code/CloudDevOps/AWS/three-tier-app-ec2/beacon`, [`docs/CLOUD-DEVOPS-DESIGN.md`](https://github.com/loriamichaelj/beacon/blob/dev/docs/CLOUD-DEVOPS-DESIGN.md). Dora follows Beacon's branch, workflow, bootstrap, state, and IAM patterns. The difference is compute: **ECS on Fargate** instead of EC2 instances, an AMI, and S3 tarballs. |
@@ -25,7 +25,7 @@
 | Phase A changes (B4) | ✅ 2026-09-26: the RDS CA bundle in the `api` image, the `dbinit` image, `deploy/ecs/` templates, `scripts/deploy/` with tests; `make ci` green (§8) |
 | Dev infrastructure (B5) | ✅ Applied 2026-09-26 as `deploy-dev` (34 resources; RDS took 9.5 minutes): the ALB, the `loria-dora-dev` cluster and the service at 0 tasks, RDS PostgreSQL 18.3, the secrets, the task roles, the log groups, and `deploy-config`. The ALB answers 503 until the first deploy |
 | First deploy (B6) | ✅ 2026-09-27: release `1ea500270995` deployed to dev (db bootstrap over `verify-full`, migration 0001, rollout, curl and browser smoke tests). The first attempt's tests failed on a Docker Hub connection reset; `pipeline-status` opened issue #5 and the passing rerun closed it. A forced second deploy rebuilt nothing and recorded itself in dev's tracker as a succeeded development deployment. Follow-ups in PR #6: pre-pull CI images with retries, the skipped deploy job's name, and `APP_VERSION` in recorded release labels |
-| Operations (B7) | 🔨 Built: `rollback.yml`, `seed.yml`, [`RUNBOOK.md`](RUNBOOK.md), and GitHub releases (`release-<version>` tags, C21). The first release is tagged; the rollback drill is next |
+| Operations (B7) | ✅ 2026-09-27: `rollback.yml`, `seed.yml`, [`RUNBOOK.md`](RUNBOOK.md), GitHub releases (C21). Release 2 (`97231f537c0b`, the version footer) deployed and published; the rollback was drilled both ways (dry run; back to `1ea500270995`; forward by its tag), each recorded as a remediation deployment; the seed loaded 1,221 demo deployments, and `dora-tracker`'s own records were byte-for-byte unchanged. The drill found and fixed three pipeline bugs (below) |
 | Everything else | ⏳ Not started. The build order is in §10 |
 
 ## 1. Summary
@@ -545,6 +545,8 @@ These are small and happen in milestone B4, on `dev`, with Phase A's full test s
 3. **`deploy/ecs/`** templates (app, migrate, db-bootstrap, seed) and **`scripts/deploy/`** (preflight, run-one-off-task, render-and-register, smoke tests, rollback rules), testable locally against a stubbed AWS CLI. (Beacon's deploy scripts are untested bash; Dora's are stdlib Python like `record_deploy.py`, C18.)
 **As built (B4, 2026-09-26).** `deploy/ecs/README.md` defines the templates and the `deploy-config` contract `infra/env` must publish. `scripts/deploy/ecs_deploy.py` has the subcommands `version`, `preflight`, `register`, `run-task`, `rollout`, `publish`, and `resolve-rollback`; `smoke_test.py` has the curl checks. Their 45 tests run in `make test-scripts` on Python 3.10, and each safety rule (circuit-breaker detection, "proven", prod = stage) was checked by breaking it and watching a test fail. `make e2e` also reruns the bootstrap with the `dbinit` image, loads the CA bundle as each image's non-root user, and smoke-tests the local stack.
 
+**Found in the B7 drill:** (1) `rollout` treated a stable deployment still marked `IN_PROGRESS` as a circuit-breaker rollback; it now waits for `COMPLETED` (PR on `dev`, `8a98cb5`). (2) and (3) A redeploy from a later, tree-identical commit runs images built from an earlier one: the release job tagged the wrong commit (PR #9), and the smoke test and self-tracking compared `/version` with the wrong commit, recording a healthy deploy as failed (PR #10). The deployed commit is now the images' build commit, read from ECR, everywhere. The one false tracker record was deleted.
+
 **Found while building it:** `ADD --chmod=644` also gave the directory it created mode 644, which the images' non-root users can't enter. Every `verify-full` connection on RDS would have failed, and no test would have noticed, because the local database has no TLS. The Dockerfiles now create `/etc/ssl/rds` first, and `make e2e` checks the bundle loads.
 
 4. **Nothing else.** The Phase A portability constraints (§14 there) already cover configuration by environment variables, discrete DB settings, TLS modes, pool pre-ping, `/healthz` for liveness, SIGTERM handling, arm64 images, relative `/api`, `/version`, `record_deploy.py`'s CI flags, and `make ci` as the single entry point.
@@ -582,7 +584,7 @@ Each milestone ends working, with its checks passing. Workflow changes go throug
 | **B4** | Phase A changes (§8): CA bundle, `dbinit` image, `deploy/ecs/` templates, `scripts/deploy/` with tests | `make ci` green; scripts tested against a stubbed AWS CLI ✅ | — |
 | **B5** | dev infrastructure: `infra/env/` + `environments/dev.tfvars`, `terraform.yml target=infra` | Cluster, ALB, RDS, secrets, and the zero-task service exist in dev ✅ | — |
 | **B6** | `deploy.yml` + `pipeline-status`: the first dev deploy | Dev serves the app at its ALB URL; smoke tests pass; the second deploy is recorded by the tracker ✅ | Create `dora-tracker` in dev's UI once ✅ |
-| **B7** | `rollback.yml`, `seed.yml`, `docs/RUNBOOK.md` | Rollback drilled (back and forth); seed loads; runbook written | — |
+| **B7** | `rollback.yml`, `seed.yml`, `docs/RUNBOOK.md` | Rollback drilled (back and forth); seed loads; runbook written ✅ | — |
 | **B8** | Cost and resilience drills: tear dev down and rebuild it from scratch | Rebuilt with no manual steps beyond approvals; costs recorded | — |
 
 **Later, not planned yet:** stage and prod (their `.tfvars`, the `promote.yml` stub, validate mode), DNS and HTTPS.

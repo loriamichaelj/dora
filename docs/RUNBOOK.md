@@ -40,6 +40,9 @@ reviewer, so it starts at once. About 15 minutes.
   development deployment, best effort (§7.6).
 - **GitHub release:** the first deploy of a release tags its commit `release-<version>` and
   publishes a pre-release.
+- **Which commit runs:** the one the release's images were built from. A later commit with
+  the same app code (say, a docs change) redeploys those images, so `/version`, the smoke test,
+  self-tracking, and the release tag all use the build commit; the job summary shows both.
 
 ## Roll back
 
