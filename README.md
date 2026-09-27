@@ -2,7 +2,7 @@
 
 A three-tier web app that records deployments, the commits they ship, and the production failures they cause, and computes the five DORA software delivery metrics from that data. It also records its own builds and deploys, through its own API.
 
-It runs locally with Docker Compose, and on AWS (ECS on Fargate, RDS, GitHub Actions with OIDC) in a **dev** environment: http://loria-dora-dev-alb-1183097088.us-east-1.elb.amazonaws.com.
+It runs locally with Docker Compose and deploys to AWS (ECS on Fargate, RDS, GitHub Actions with OIDC).
 
 > **You're on `main`, which holds only the GitHub Actions workflows.** The app, its infrastructure, and all the documentation live on the [`dev`](https://github.com/loriamichaelj/dora/tree/dev) branch. Start with its [README](https://github.com/loriamichaelj/dora/blob/dev/README.md).
 
@@ -32,7 +32,7 @@ Pipelines report deployments to an idempotent ingest API, and people record fail
 | Branch | Holds |
 |---|---|
 | [`dev`](https://github.com/loriamichaelj/dora/tree/dev) | all development: the app, Terraform, scripts, and docs |
-| `stage`, `prod` | changed only by pull requests, dev → stage → prod (designed; only dev is provisioned) |
+| `stage`, `prod` | changed only by pull requests, dev → stage → prod |
 | `main` | the GitHub Actions workflows, each changed by a PR from a `workflows/<name>` branch |
 
 Every workflow's logic lives here as a reusable workflow; thin trigger stubs on `dev` call them with an explicit `ref`.
