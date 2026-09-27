@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Author** | M.L. |
-| **Status** | v0.17: B0–B7 done; dev serves the app, rolls back, and tracks its releases. B8 skipped by decision: documented (§10.1), not run. Stage, prod, and DNS aren't planned yet (§0, §10). Open items 1–2 resolved. **Dev only: one ECS cluster** |
+| **Status** | v0.18: B0–B7 done; dev serves the app, rolls back, and tracks its releases. B8 skipped (documented only). **Final work planned, not built:** B9 Trivy + Checkov, B10 SonarQube Cloud, B11 HTTPS (§10.2). Stage and prod aren't planned yet (§0, §10). Open items 1–2 resolved. **Dev only: one ECS cluster** |
 | **Date** | 2026-09-25 (updated 2026-09-27) |
 | **Depends on** | [`3T-APP-DESIGN.md`](3T-APP-DESIGN.md) v1.2 (v1.2 lists the Phase A changes this phase made, §8). Phase A is complete: the app runs and is fully tested on localhost, and it meets the portability constraints in §14 of that document. |
 | **Reference** | Beacon, `~/Code/CloudDevOps/AWS/three-tier-app-ec2/beacon`, [`docs/CLOUD-DEVOPS-DESIGN.md`](https://github.com/loriamichaelj/beacon/blob/dev/docs/CLOUD-DEVOPS-DESIGN.md). Dora follows Beacon's branch, workflow, bootstrap, state, and IAM patterns. The difference is compute: **ECS on Fargate** instead of EC2 instances, an AMI, and S3 tarballs. |
@@ -28,7 +28,8 @@
 | First deploy (B6) | ✅ 2026-09-27: release `1ea500270995` deployed to dev (db bootstrap over `verify-full`, migration 0001, rollout, curl and browser smoke tests). The first attempt's tests failed on a Docker Hub connection reset; `pipeline-status` opened issue #5 and the passing rerun closed it. A forced second deploy rebuilt nothing and recorded itself in dev's tracker as a succeeded development deployment. Follow-ups in PR #6: pre-pull CI images with retries, the skipped deploy job's name, and `APP_VERSION` in recorded release labels |
 | Operations (B7) | ✅ 2026-09-27: `rollback.yml`, `seed.yml`, [`RUNBOOK.md`](RUNBOOK.md), GitHub releases (C21). Release 2 (`97231f537c0b`, the version footer) deployed and published; the rollback was drilled both ways (dry run; back to `1ea500270995`; forward by its tag), each recorded as a remediation deployment; the seed loaded 1,221 demo deployments, and `dora-tracker`'s own records were byte-for-byte unchanged. The drill found and fixed three pipeline bugs (below) |
 | Teardown and rebuild (B8) | ⏭️ B8 skipped by decision (2026-09-27): documented in §10.1 and the runbook, not run. Dev stays up |
-| Not planned yet | ⏳ Stage and prod (their `.tfvars`, `promote.yml`, validate mode), DNS and HTTPS (§6.10), and the deferred items in §11 |
+| Final work (B9–B11) | 📝 Planned in §10.2, not built: B9 Trivy and Checkov, B10 SonarQube Cloud, B11 HTTPS. Waits on open items 11–14 and three manual steps (a domain, a SonarQube Cloud project and token) |
+| Not planned yet | ⏳ Stage and prod (their `.tfvars`, `promote.yml`, validate mode), and the deferred items in §11 |
 
 ## 1. Summary
 
@@ -117,6 +118,7 @@ For stage and prod, the PR merge starts a deploy and the GitHub Environment's re
 | `rollback.yml` | Roll an environment back to an earlier release, with safety rules and a dry run | dispatch | `dev`/`stage`/`prod` |
 | `seed.yml` | Load the Phase A demo data into **dev** as a one-off ECS task | dispatch | `dev` |
 | `test.yml` | Reusable `make ci` (lint, contract check, all tests including E2E): the one definition of green | call, dispatch | none |
+| `security.yml` *(planned, B9)* | Reusable. Trivy (dependencies, secrets, images) and Checkov (Terraform, Dockerfiles, workflows); SARIF to GitHub code scanning (§10.2.1) | call (from `dev-ci.yml` and `deploy.yml`), dispatch | none |
 | `ci.yml` | actionlint (with shellcheck) on PRs into `main`; its **Lint workflows** check becomes required on `main` | PR → `main`, dispatch | none |
 | `.github/actions/pipeline-status` | Composite action: failure notifications (§4.5) | used by deploy and rollback | — |
 
@@ -429,7 +431,7 @@ The image carries `APP_VERSION`, `GIT_SHA`, and `BUILD_TIME` as build arguments,
 
 ### 6.10 DNS and HTTPS: deferred
 
-As in Beacon: until a domain exists, each environment's ALB serves HTTP on its AWS DNS name. When one does, a new `infra/dns/` root (`target=dns`, `shared`) adds a hosted zone, a DNS-validated wildcard ACM certificate, an HTTPS :443 listener, and an :80 → :443 redirect. The app doesn't change.
+**Planned as B11** (§10.2.3), not built. As in Beacon: until a domain exists, each environment's ALB serves HTTP on its AWS DNS name. When one does, a new `infra/dns/` root (`target=dns`, `shared`) adds a hosted zone, a DNS-validated wildcard ACM certificate, an HTTPS :443 listener, and an :80 → :443 redirect. The app doesn't change.
 
 Beacon learned that browsers withhold some APIs, such as `crypto.randomUUID`, on plain-HTTP pages. Dora's UI doesn't use any of them (checked), and the browser smoke test (§7.2) would catch a regression.
 
@@ -588,6 +590,9 @@ Each milestone ends working, with its checks passing. Workflow changes go throug
 | **B6** | `deploy.yml` + `pipeline-status`: the first dev deploy | Dev serves the app at its ALB URL; smoke tests pass; the second deploy is recorded by the tracker ✅ | Create `dora-tracker` in dev's UI once ✅ |
 | **B7** | `rollback.yml`, `seed.yml`, `docs/RUNBOOK.md` | Rollback drilled (back and forth); seed loads; runbook written ✅ | — |
 | **B8** | Cost and resilience drills: tear dev down and rebuild it from scratch | ⏭️ Skipped by decision; documented only (§10.1) | — |
+| **B9** | Trivy and Checkov (§10.2.1): `security.yml`, scanner config, the image scan gate in `deploy.yml` | Scans run on every push to `dev` and in every deploy, findings in code scanning; backlog triaged; then gating on | Decide open items 12, 13 |
+| **B10** | SonarQube Cloud (§10.2.2): CI analysis with coverage | `dev` analyzed on every push with API, script, and web coverage; quality gate enforced after a baseline | **Yes**: SonarQube Cloud project, `SONAR_TOKEN` (open item 14) |
+| **B11** | HTTPS (§10.2.3): `infra/dns`, the 443 listener and redirect, `dev.<domain>` | Dev serves `https://dev.<domain>`, HTTP redirects to it, the smoke tests check TLS | **Yes**: register the domain (open item 11) |
 
 **Later, not planned yet:** stage and prod (their `.tfvars`, the `promote.yml` stub, validate mode), DNS and HTTPS.
 
@@ -628,10 +633,99 @@ Each milestone ends working, with its checks passing. Workflow changes go throug
 
 **Who does what.** The user starts each `destroy` and `apply` (starting applies from here was blocked) and approves the network runs in `shared`. The deploys can be started from here. Every run is watched and checked. While torn down, dev costs only the ECR images and the state bucket (cents a month). About 1–1.5 hours end to end, mostly RDS and endpoint creation.
 
+### 10.2 Final work: security scanning, code quality, HTTPS (planned, not built)
+
+Planned 2026-09-27; nothing here is built. Three milestones, in this order:
+
+| # | Workstream | Blocked on | Relative size |
+|---|---|---|---|
+| **B9** | Trivy and Checkov (§10.2.1) | Nothing external (open items 12, 13 decide how strict) | Largest: most of it is triaging the first results |
+| **B10** | SonarQube Cloud (§10.2.2) | A SonarQube Cloud project and `SONAR_TOKEN` (manual) | Small |
+| **B11** | HTTPS (§10.2.3) | Registering a domain (manual; open item 11) | Medium |
+
+Scanning goes first: it needs no domain or account, and its findings (the plain-HTTP listener among them) feed B11's Terraform. It's the same order Beacon planned (its §11).
+
+#### 10.2.1 B9: Trivy and Checkov
+
+Decision C22. Findings are reported, not enforced, until the first results are triaged.
+
+- **`security.yml`** (new, reusable, on `main`): runs on every push to `dev`, through a second job in the `dev-ci.yml` stub, and inside `deploy.yml`. It uploads SARIF to GitHub code scanning (free for this public repo; needs `security-events: write`). During the report-only phase, its steps don't fail the job.
+- **Trivy** (vulnerabilities and secrets):
+  - dependencies: `api/uv.lock`, `web/package-lock.json`, `web/tools/openapi/package-lock.json`;
+  - committed secrets, across the repo;
+  - **the three images** (`api`, `web`, `dbinit`), inside `deploy.yml`'s build job, **before they're pushed** (C23). Today the build pushes directly (`docker buildx build --push`). It becomes build with `--load`, scan, then push, because ECR tags are immutable (§6.5): a pushed image can't be withdrawn by retagging. ECR's scan on push stays as a second, informational scan of what was published.
+  - Its vulnerability database comes from a registry, like the Docker Hub images that failed a deploy once (B6). Cache it between runs (`actions/cache`) and fall back to the `public.ecr.aws` mirror, with retries.
+- **Checkov** (misconfiguration): the three Terraform roots and `infra/bootstrap`; the three Dockerfiles; the GitHub Actions workflows (scanned on PRs into `main` too, next to actionlint in `ci.yml`). It can't read the ECS task-definition templates (JSON, not Terraform), so `test_ecs_deploy.py` keeps asserting their security properties: images by digest, secrets by reference, the task boundary.
+- **Configuration**, on `dev`, promoted with the code: `trivy.yaml` and `.checkov.yaml`. Each suppression is an inline skip with a written reason (`#checkov:skip=<ID>: <reason>`), or a `.trivyignore` entry with a reason and a review date.
+- **Tools pinned:** Trivy and Checkov at exact versions (installed by checksum, or their GitHub Actions pinned by commit SHA), as every other action here is.
+- **Expected first-run backlog**, to triage one by one:
+  - **dev-only settings, skipped with a reason:** RDS deletion protection off, single-AZ, 1-day backups, no final snapshot; secrets without a customer-managed key;
+  - **fixed by B11:** the plain-HTTP listener and no HTTP → HTTPS redirect;
+  - **choices with a cost (open item 13):** no WAF; ALB access logs and VPC flow logs off; AWS-managed keys instead of customer-managed ones (ECR, log groups, the state bucket); log retention of 14 days, not a year;
+  - **deliberate, skipped with a reason:** Container Insights off (§6.9); the deploy roles' read-only `*` actions (§5.3); the `ecs:RegisterTaskDefinition` request-tag scoping (§5.3);
+  - **OS CVEs** in the base images (`python:3.13-slim`, `nginx-unprivileged:alpine`, `postgres:18.6`), fixed by bumping them where a fix exists.
+- **Then gate** (open item 12): Trivy fails on fixable HIGH and CRITICAL findings; Checkov fails on anything neither fixed nor skipped. The image gate then stops a vulnerable image from ever reaching ECR.
+- **Optional:** a CycloneDX SBOM attached to each GitHub release (C21); a scheduled rescan of the running release, since new CVEs appear after a release ships.
+
+#### 10.2.2 B10: SonarQube Cloud
+
+Decision C24: SonarQube Cloud, free for this public repo, with no server to run.
+
+- **Manual (you):**
+  - sign in at sonarcloud.io with GitHub, and import `loriamichaelj/dora`;
+  - set the project's main branch to **`dev`**: Sonar assumes the code is on the default branch, but `main` holds only workflows;
+  - turn off Automatic Analysis, because CI-based analysis is needed to import coverage;
+  - add the `SONAR_TOKEN` repository secret.
+- **On `dev`:**
+  - `sonar-project.properties`: sources `api/app`, `web/src`, `scripts`; tests; exclusions for generated files (`web/src/api/schema.d.ts`, `openapi.json`) and migrations;
+  - coverage for all three codebases: the API already writes `reports/coverage-api.xml`; the scripts gain `pytest-cov` (`reports/coverage-scripts.xml`); the web tests gain `@vitest/coverage-v8` writing lcov (`reports/coverage-web/lcov.info`).
+- **On `main`:** a scan step in `test.yml` after `make ci` (pinned `SonarSource/sonarqube-scan-action`), so every push to `dev` and every deploy is analyzed. Pushes to `dev` are branch analyses. `dev` has no pull requests, so there's no PR decoration.
+- **Quality gate** (open item 14): report-only first, as with B9; enforced once there's a baseline.
+
+#### 10.2.3 B11: HTTPS
+
+Decision C25. It implements §6.10. ACM can't issue certificates for `*.elb.amazonaws.com`, so HTTPS needs a registered domain.
+
+- **Manual (you), once:** register the domain in Route 53 (open item 11). It's a purchase with registrant contact details, so it's a deliberate human step, like the bootstrap role. Registration creates the hosted zone. About $14/year for a `.com`, plus $0.50/month for the zone.
+- **Build:**
+  1. **Bootstrap IAM** (`bootstrap.yml`):
+     - `deploy-shared` gains ACM (request, describe, tag, delete certificates) and Route 53 (read the zone, change its records, `GetChange`), scoped to the zone.
+     - `deploy-dev` gains `route53:ChangeResourceRecordSets` on the zone, limited to its own name `dev.<domain>` (the `route53:ChangeResourceRecordSetsNormalizedRecordNames` condition).
+  2. **`infra/dns`** (new root, `terraform.yml target=dns`, the `shared` Environment, `env:/shared/dns.tfstate`). It reads the registered zone through a data source rather than creating one, requests a wildcard certificate `*.<domain>` (plus the apex) with DNS validation, and outputs the certificate ARN and zone ID. `terraform.yml` gains the `dns` target (a PR into `main`).
+  3. **`infra/env`:**
+     - a 443 listener on the certificate, with policy `ELBSecurityPolicy-TLS13-1-2-2021-06`;
+     - the :80 listener switches from `forward` to a 301 redirect to HTTPS;
+     - an ALB security-group rule for 443;
+     - an alias record `dev.<domain>` → the ALB;
+     - a new `deploy-config` key, **`app_url`** (`https://dev.<domain>`), which the smoke tests, self-tracking, and the Environment URL use instead of `alb_dns_name`. That's a contract change: `deploy/ecs/README.md`, `CONFIG_KEYS`, and the key-parity test (B5).
+     
+     The target group and its `/healthz` check don't change.
+  4. **nginx** (a small Phase A change): pass the ALB's `X-Forwarded-Proto` through instead of overwriting it with its own `$scheme` (always `http` behind the ALB), and send an HSTS header only when that header is `https`.
+  5. **Smoke tests:** `smoke_test.py` gains checks for HTTP → 301 to HTTPS, a valid certificate for the hostname (`urllib` verifies by default), and TLS 1.0 and 1.1 refused. The browser smoke test runs against `https://dev.<domain>`.
+  6. **Docs:** §6.10 (the real domain), §0, the runbook, the README.
+
+The app itself doesn't change: it's served from one origin, and the API is always the relative `/api`.
+
+#### 10.2.4 Cost
+
+| Item | Cost |
+|---|---|
+| Domain (`.com`) | ~$14/year |
+| Route 53 hosted zone | $0.50/month |
+| ACM certificate | free |
+| Trivy, Checkov, GitHub code scanning | free (open source, public repo, GitHub-hosted runners) |
+| SonarQube Cloud | free (public repo) |
+| Optional, from Checkov triage (open item 13) | WAF ~$6/month and up; customer-managed KMS keys ~$1/month each; ALB access logs and VPC flow logs, pennies |
+
+#### 10.2.5 Where changes land
+
+As for B1–B7:
+- **By PR into `main`,** from a kept `workflows/<name>` branch that must pass **Lint workflows**: the workflow changes, namely `security.yml`, the image gate and scans in `deploy.yml`, the Sonar step in `test.yml`, Checkov in `ci.yml`, and the `dns` target in `terraform.yml`.
+- **On `dev`:** scanner and Sonar configuration, coverage settings, Terraform, the nginx change, the smoke-test changes, and the `dev-ci.yml` stub's second job.
+
 ## 11. Deferred
 
 - Stage and prod infrastructure, `promote.yml`, validate mode (dev-only scope).
-- DNS and HTTPS (§6.10).
 - Secret rotation, including an `ALTER ROLE` step in `db-bootstrap` so rotated passwords apply to existing roles.
 - ECS Exec for interactive debugging (needs `ssmmessages` endpoints, ~$15/month).
 - Container Insights, CloudWatch alarms and dashboards, `/metrics` scraping.
@@ -654,6 +748,10 @@ Items 7–10 belong to B8, which is skipped (§10.1). They're kept for whoever r
 8. **The network in B8.** The account's us-east-1 is at its quota of 5 VPCs (§6.2). If another project in the shared account creates a VPC between the network's `destroy` and its rebuild, the rebuild fails with `VpcLimitExceeded`. Options: (a) request a quota increase first, then tear everything down; (b) drill only `infra` and keep the network: cheaper and safer, but the network's rebuild stays unproven.
 9. **Self-tracking without a manual step** (§10.1). Let dev's deploys create the `dora-tracker` service when it's missing (drop `--no-ensure-service` for dev), or keep creating it by hand, a manual step B8's done-when doesn't allow.
 10. **How costs are read** (§10.1 step 4). No role can read Billing, and the user doesn't use AWS credentials locally. Options: (a) the user reads Cost Explorer, filtered by the `Project=loria-dora` tag, and reports the figures; (b) grant a read-only Cost Explorer permission to a role through bootstrap. Filtering by tag needs the `Project` cost-allocation tag activated in Billing, which may need the account owner.
+11. **The domain for HTTPS** (B11, §10.2.3). Which name; registered in this shared account's Route 53 (a purchase: who pays, and does the account allow it); and whether one domain serves both Dora and Beacon (for example `dora.<domain>` and `beacon.<domain>`, one hosted zone) or each gets its own.
+12. **When scanning starts to gate** (B9, §10.2.1). Proposed: after the first triage, Trivy fails on fixable HIGH and CRITICAL findings, and Checkov fails on anything neither fixed nor skipped with a reason.
+13. **The paid Checkov remediations** (B9). WAF on the ALB (~$6/month and up), ALB access logs and VPC flow logs (an S3 bucket or log group; pennies in dev), and customer-managed KMS keys (~$1/month each): fix each, or skip it with a written reason.
+14. **The SonarQube quality gate** (B10, §10.2.2). The default "Sonar way" or a custom gate (for example, a coverage floor on new code), and when it starts to block.
 
 ## 13. Decision log
 
@@ -680,3 +778,7 @@ Items 7–10 belong to B8, which is skipped (§10.1). They're kept for whoever r
 | C19 | Two execution roles per environment: `…-task-exec` (app, migrate, seed) and `…-db-bootstrap-exec` (also reads the RDS master secret). One task role with no permissions | Only the one-off bootstrap task ever needs the master password | One execution role that can read every secret |
 | C20 | A rollback is recorded in the environment's tracker as a remediation deployment of the target's commit, and renders the target's own task-definition template | A rollback is an unplanned fix, which is what the rework rate counts; rendering from the target's commit runs exactly what that release ran, including its environment variables | Not recording rollbacks; rendering the target's images with today's template |
 | C21 | Each release is tracked on GitHub: the first successful deploy of a release tags its commit `release-<version>` and publishes a pre-release. A release becomes **official** (a full release, marked Latest, with notes on what changed) when the owner promotes it; once prod exists, reaching prod will do that. Rollback accepts the tag as a target | Releases are visible and linkable next to the code, with the commit, images, and deploy run; the content-hash version stays the identity, so tags and ECR agree | Semantic version tags (the version is a content hash, §7.1); tagging every deploy |
+| C22 | Trivy for vulnerabilities and secrets (dependencies, images); Checkov for misconfiguration (Terraform, Dockerfiles, workflows); SARIF to GitHub code scanning; report-only until triaged, then gating; each suppression carries a written reason | Each tool does what it's best at; findings live next to the code; gating before triage would block every deploy on a backlog of dev-only settings | tfsec (now part of Trivy); Snyk (usage limits); gating from the first run |
+| C23 | Images are scanned **before** they're pushed: build with `--load`, scan, then push | ECR tags are immutable (§6.5), so a pushed image can't be withdrawn by retagging; ECR's scan on push only reports after the fact | Scanning only in ECR after the push |
+| C24 | SonarQube Cloud with CI-based analysis and coverage from all three codebases; its main branch is `dev` | Free for a public repo, with no server to run; `dev` is where the code is (`main` holds only workflows) | Self-hosting SonarQube on ECS or EC2 (~$30–60/month and another service to operate); Automatic Analysis (no coverage) |
+| C25 | HTTPS through a domain registered in Route 53, a DNS-validated wildcard ACM certificate in a new `infra/dns` root (`shared`), and a per-environment alias record created by `infra/env`, whose role may change only its own name | ACM can't issue certificates for ALB hostnames; one certificate serves every environment; record-name conditions keep each deploy role to its own record | A self-signed or imported certificate (browser warnings); CloudFront in front of the ALB (more moving parts than needed) |
