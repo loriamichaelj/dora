@@ -29,6 +29,7 @@ import string
 import subprocess
 import sys
 import tempfile
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -49,6 +50,9 @@ MIGRATIONS = "api/alembic/versions"
 VERSION_RE = re.compile(r"^[0-9a-f]{12}$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 NO_RELEASE = "none"  # release-version's value until the first deploy (§7.4)
+# After services-stable: how long to wait for the deployment to be marked COMPLETED.
+ROLLOUT_SETTLE_TIMEOUT_S = 600
+ROLLOUT_POLL_S = 15
 
 # What infra/env publishes as /<name_prefix>/<env>/deploy-config (§6.8).
 # See deploy/ecs/README.md for each key.
@@ -262,7 +266,9 @@ def preflight(aws: Aws, ctx: Context, version: str) -> dict[str, Any]:
             raise DeployError(f"Release {version} isn't what stage runs ({staged or 'nothing'}).")
 
     log(f"preflight passed for {version} in {ctx.environment}")
-    return {"version": version, "images": images}
+    # The commit the images were built from (their sha-<commit> tag): a later,
+    # tree-identical commit deploys the same images (§7.1).
+    return {"version": version, "images": images, "commit": release_commit(aws, ctx, version)}
 
 
 # ---- task definitions ------------------------------------------------------------
@@ -399,18 +405,34 @@ def rollout(aws: Aws, config: Mapping[str, Any], task_definition: str) -> None:
     except AwsError as exc:
         raise DeployError(f"{service} didn't become stable: {exc}") from exc
 
-    # The circuit breaker may have rolled back to the previous revision, which
-    # also leaves the service stable: check which revision is actually live.
-    after = aws("ecs", "describe-services", "--cluster", cluster, "--services", service)[
-        "services"
-    ][0]
-    primary = next(d for d in after["deployments"] if d["status"] == "PRIMARY")
-    if primary["taskDefinition"] != task_definition or primary.get("rolloutState") != "COMPLETED":
-        raise DeployError(
-            f"{service} is running {primary['taskDefinition']} "
-            f"({primary.get('rolloutState', 'unknown')}), not {task_definition}: the new "
-            "tasks never became healthy and the circuit breaker rolled back."
-        )
+    # "Stable" isn't "done": ECS marks the deployment COMPLETED a little after
+    # the service settles, and the circuit breaker may have rolled back to the
+    # previous revision, which is stable too. Wait for the primary deployment's
+    # rollout to finish, then check it's ours.
+    deadline = time.monotonic() + ROLLOUT_SETTLE_TIMEOUT_S
+    while True:
+        after = aws("ecs", "describe-services", "--cluster", cluster, "--services", service)[
+            "services"
+        ][0]
+        primary = next(d for d in after["deployments"] if d["status"] == "PRIMARY")
+        state = primary.get("rolloutState", "UNKNOWN")
+        if primary["taskDefinition"] != task_definition:
+            raise DeployError(
+                f"{service} is running {primary['taskDefinition']}, not {task_definition}: "
+                "the new tasks never became healthy and the circuit breaker rolled back."
+            )
+        if state == "COMPLETED":
+            break
+        if state == "FAILED":
+            reason = primary.get("rolloutStateReason", "no reason given")
+            raise DeployError(f"The rollout of {task_definition} failed: {reason}")
+        if time.monotonic() >= deadline:
+            raise DeployError(
+                f"{service} is stable on {task_definition}, but its rollout is still "
+                f"{state} after {ROLLOUT_SETTLE_TIMEOUT_S} s."
+            )
+        log(f"rollout {state}; checking again in {ROLLOUT_POLL_S} s")
+        time.sleep(ROLLOUT_POLL_S)
     log(f"{service} is running {task_definition}")
 
 

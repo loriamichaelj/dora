@@ -72,6 +72,9 @@ class FakeAws:
     task_exit_code: int | None = 0
     task_reason: str | None = None
     unhealthy_rollout: bool = False
+    # Describes after the update that still report IN_PROGRESS, then the final state.
+    rollout_in_progress_for: int = 0
+    rollout_final_state: str = "COMPLETED"
     registered: list[dict[str, Any]] = field(default_factory=list)
     calls: list[list[str]] = field(default_factory=list)
     log_events: list[str] = field(default_factory=lambda: ["INFO upgrade done"])
@@ -154,6 +157,15 @@ class FakeAws:
 
     def ecs_describe_services(self, _argv, _pos, opts):
         svc = self.services.get(opts["services"])
+        if svc and svc["deployments"]:
+            primary = svc["deployments"][0]
+            if self.rollout_in_progress_for > 0:
+                self.rollout_in_progress_for -= 1
+                primary["rolloutState"] = "IN_PROGRESS"
+            else:
+                primary["rolloutState"] = self.rollout_final_state
+                if self.rollout_final_state == "FAILED":
+                    primary["rolloutStateReason"] = "ECS deployment circuit breaker: tasks failed"
         return {"services": [svc] if svc else []}
 
     def ecr_describe_images(self, argv, _pos, opts):
@@ -300,6 +312,7 @@ def test_preflight_returns_the_release_images_by_digest(fake: FakeAws) -> None:
     fake.release(V1, SHA1)
     result = ed.preflight(aws(fake), ctx(), V1)
     assert result["version"] == V1
+    assert result["commit"] == SHA1  # the build commit, from the sha-<commit> tag
     assert result["images"]["api"] == (
         f"{ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com/{PREFIX}/api@{digest('api', V1)}"
     )
@@ -540,6 +553,41 @@ def test_rollout_fails_when_the_circuit_breaker_rolled_back(fake: FakeAws) -> No
     fake.unhealthy_rollout = True
     with pytest.raises(ed.DeployError, match="circuit breaker rolled back"):
         ed.rollout(aws(fake), deploy_config(), arn("ecs", "task-definition/loria-dora-dev-app:2"))
+
+
+@pytest.fixture
+def no_sleep(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    slept: list[float] = []
+    monkeypatch.setattr(ed.time, "sleep", slept.append)
+    return slept
+
+
+def test_rollout_waits_while_a_stable_deployment_is_still_in_progress(
+    fake: FakeAws, no_sleep: list[float]
+) -> None:
+    # The first deploy's real failure: services-stable returned while ECS still
+    # reported the new, healthy deployment IN_PROGRESS.
+    fake.rollout_in_progress_for = 2
+    td = arn("ecs", "task-definition/loria-dora-dev-app:3")
+    ed.rollout(aws(fake), deploy_config(), td)
+    assert no_sleep == [ed.ROLLOUT_POLL_S, ed.ROLLOUT_POLL_S]
+
+
+def test_rollout_fails_when_the_deployment_fails(fake: FakeAws, no_sleep: list[float]) -> None:
+    fake.rollout_final_state = "FAILED"
+    with pytest.raises(ed.DeployError, match=r"rollout of .* failed: ECS deployment circuit"):
+        ed.rollout(aws(fake), deploy_config(), arn("ecs", "task-definition/loria-dora-dev-app:3"))
+
+
+def test_rollout_gives_up_if_it_never_completes(
+    fake: FakeAws, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake.rollout_in_progress_for = 10**6
+    clock = iter(range(0, 10**6, 60))
+    monkeypatch.setattr(ed.time, "monotonic", lambda: float(next(clock)))
+    monkeypatch.setattr(ed.time, "sleep", lambda _s: None)
+    with pytest.raises(ed.DeployError, match="still IN_PROGRESS after 600 s"):
+        ed.rollout(aws(fake), deploy_config(), arn("ecs", "task-definition/loria-dora-dev-app:3"))
 
 
 def test_publish_overwrites_the_release_pointer(fake: FakeAws) -> None:
