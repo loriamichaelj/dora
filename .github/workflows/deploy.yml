@@ -269,11 +269,28 @@ jobs:
             echo "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           } >> "$GITHUB_OUTPUT"
 
+      # What will run is the commit the images were built from. It differs
+      # from this deploy's commit when a later commit with the same app code
+      # redeploys them (a forced redeploy, or a rerun after a failure). The
+      # smoke test and self-tracking check /version against it, as rollback
+      # does with its target.
       - name: Decide
         id: decide
         env:
           PREVIOUS: ${{ steps.preflight.outputs.previous }}
+          BUILD_COMMIT: ${{ steps.preflight.outputs.build_commit }}
         run: |
+          deployed="${BUILD_COMMIT:-${SHA}}"
+          record_repo=.
+          if [ "${deployed}" != "${SHA}" ]; then
+            echo "::notice::Release ${VERSION}'s images were built from ${deployed:0:7}; ${SHA:0:7} has the same app code, so ${deployed:0:7} is what runs."
+            git worktree add --detach "${RUNNER_TEMP}/deployed" "${deployed}"
+            record_repo="${RUNNER_TEMP}/deployed"
+          fi
+          {
+            echo "DEPLOYED_SHA=${deployed}"
+            echo "RECORD_REPO=${record_repo}"
+          } >> "$GITHUB_ENV"
           if [ "${MODE}" = "validate" ]; then
             echo "Validate mode: ${ENVIRONMENT} would go from ${PREVIOUS} to ${VERSION}. Nothing changed."
             echo "rollout=false" >> "$GITHUB_OUTPUT"
@@ -297,7 +314,7 @@ jobs:
           echo "::add-mask::${INGEST_API_KEY}"
           export INGEST_API_KEY
           python3 scripts/record_deploy.py --best-effort --no-ensure-service \
-            --api-url "${URL}" --environment "${TRACKER_ENV}" --started-at "${STARTED_AT}" \
+            --repo "${RECORD_REPO}" --api-url "${URL}" --environment "${TRACKER_ENV}" --started-at "${STARTED_AT}" \
             --external-id "gha-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${ENVIRONMENT}" \
             --status in_progress
 
@@ -331,7 +348,7 @@ jobs:
         if: steps.decide.outputs.rollout == 'true'
         env:
           URL: ${{ steps.preflight.outputs.url }}
-        run: python3 scripts/deploy/smoke_test.py --base-url "${URL}" --git-sha "${SHA}"
+        run: python3 scripts/deploy/smoke_test.py --base-url "${URL}" --git-sha "${DEPLOYED_SHA}"
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         if: steps.decide.outputs.rollout == 'true'
@@ -363,7 +380,7 @@ jobs:
           echo "::add-mask::${INGEST_API_KEY}"
           export INGEST_API_KEY
           python3 scripts/record_deploy.py --best-effort --no-ensure-service \
-            --api-url "${URL}" --environment "${TRACKER_ENV}" --started-at "${STARTED_AT}" \
+            --repo "${RECORD_REPO}" --api-url "${URL}" --environment "${TRACKER_ENV}" --started-at "${STARTED_AT}" \
             --external-id "gha-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${ENVIRONMENT}" \
             --status auto
 
@@ -379,7 +396,7 @@ jobs:
             echo
             echo "| | |"
             echo "|---|---|"
-            echo "| Release | \`${VERSION}\` (commit \`${SHA:0:7}\`) |"
+            echo "| Release | \`${VERSION}\` (deployed from \`${SHA:0:7}\`; running \`${DEPLOYED_SHA:0:7}\`) |"
             echo "| Previously running | \`${PREVIOUS:-unknown}\` |"
             [ -n "${URL}" ] && echo "| URL | ${URL} |"
           } >> "$GITHUB_STEP_SUMMARY"
