@@ -1,5 +1,7 @@
 import { Link, NavLink, Outlet } from 'react-router';
 
+import { useVersion } from '../api/queries';
+
 import { cx } from '../lib/cx';
 import { DoraLogo, Icon, type IconName } from './Icon';
 import styles from './Layout.module.css';
@@ -52,6 +54,27 @@ export function Layout() {
       <main id="main" tabIndex={-1} className={styles.main}>
         <Outlet />
       </main>
+      <BuildFooter />
     </div>
+  );
+}
+
+/** Which build is serving this page: shows at a glance what a deploy or rollback changed. */
+function BuildFooter() {
+  const version = useVersion();
+  if (!version.data) return null;
+  const { version: appVersion, git_sha: sha } = version.data;
+  return (
+    <footer className={styles.footer}>
+      DORA Tracker {appVersion}
+      {sha !== 'unknown' && (
+        <>
+          {' · '}
+          <span className={styles.mono} title={sha}>
+            {sha.slice(0, 7)}
+          </span>
+        </>
+      )}
+    </footer>
   );
 }

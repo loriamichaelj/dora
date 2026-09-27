@@ -430,7 +430,11 @@ def release_history(aws: Aws, ctx: Context) -> list[str]:
     return [v for v in values if v != NO_RELEASE]
 
 
+RELEASE_TAG_PREFIX = "release-"  # GitHub tags: release-<version>, one per release
+
+
 def resolve_target(aws: Aws, ctx: Context, target: str, current: str, history: list[str]) -> str:
+    target = target.strip().removeprefix(RELEASE_TAG_PREFIX)
     if target == "previous":
         earlier = [v for v in history if v != current]
         if not earlier:
@@ -445,8 +449,8 @@ def resolve_target(aws: Aws, ctx: Context, target: str, current: str, history: l
             raise DeployError(f"No release was built from commit {target}.")
         return versions[0]
     raise DeployError(
-        f"--target must be 'previous', a 12-character release version, or a full "
-        f"40-character commit SHA (got {target!r})."
+        f"--target must be 'previous', a 12-character release version (or its "
+        f"release-<version> tag), or a full 40-character commit SHA (got {target!r})."
     )
 
 

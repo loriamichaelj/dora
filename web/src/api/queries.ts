@@ -76,3 +76,13 @@ export function useDoraTimeseries(query: MetricsQuery | null) {
     },
   });
 }
+
+/** What's running: the app version and the commit it was built from. */
+export function useVersion() {
+  return useQuery({
+    queryKey: ['version'],
+    queryFn: async () => (await unwrap(api.GET('/version'))).data,
+    staleTime: Infinity,
+    retry: false,
+  });
+}

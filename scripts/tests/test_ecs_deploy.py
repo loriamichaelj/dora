@@ -602,6 +602,11 @@ def test_rollback_to_a_release_with_the_same_migrations_needs_no_flag(
     assert resolve(fake, repo, target=V2)["version"] == V2
 
 
+def test_rollback_by_release_tag(history_repo: dict[str, str], repo: Repo) -> None:
+    fake = rollback_fake(history_repo)
+    assert resolve(fake, repo, target=f"release-{V2}")["version"] == V2
+
+
 def test_rollback_by_commit_sha(history_repo: dict[str, str], repo: Repo) -> None:
     fake = rollback_fake(history_repo)
     result = resolve(fake, repo, target=history_repo[V2])

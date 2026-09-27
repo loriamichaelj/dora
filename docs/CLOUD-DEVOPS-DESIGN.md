@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Author** | M.L. |
-| **Status** | v0.12: B0–B6 done; dev serves the app. Next is B7, rollback, seed, and the runbook (§0, §10). Open items 1–2 resolved. **Dev only: one ECS cluster** |
+| **Status** | v0.13: B0–B6 done; dev serves the app. B7 built: rollback, seed, runbook, and GitHub releases; the rollback drill is next (§0, §10). Open items 1–2 resolved. **Dev only: one ECS cluster** |
 | **Date** | 2026-09-25 |
 | **Depends on** | [`3T-APP-DESIGN.md`](3T-APP-DESIGN.md) v1.0. Phase A is complete: the app runs and is fully tested on localhost, and it meets the portability constraints in §14 of that document. |
 | **Reference** | Beacon, `~/Code/CloudDevOps/AWS/three-tier-app-ec2/beacon`, [`docs/CLOUD-DEVOPS-DESIGN.md`](https://github.com/loriamichaelj/beacon/blob/dev/docs/CLOUD-DEVOPS-DESIGN.md). Dora follows Beacon's branch, workflow, bootstrap, state, and IAM patterns. The difference is compute: **ECS on Fargate** instead of EC2 instances, an AMI, and S3 tarballs. |
@@ -25,6 +25,7 @@
 | Phase A changes (B4) | ✅ 2026-09-26: the RDS CA bundle in the `api` image, the `dbinit` image, `deploy/ecs/` templates, `scripts/deploy/` with tests; `make ci` green (§8) |
 | Dev infrastructure (B5) | ✅ Applied 2026-09-26 as `deploy-dev` (34 resources; RDS took 9.5 minutes): the ALB, the `loria-dora-dev` cluster and the service at 0 tasks, RDS PostgreSQL 18.3, the secrets, the task roles, the log groups, and `deploy-config`. The ALB answers 503 until the first deploy |
 | First deploy (B6) | ✅ 2026-09-27: release `1ea500270995` deployed to dev (db bootstrap over `verify-full`, migration 0001, rollout, curl and browser smoke tests). The first attempt's tests failed on a Docker Hub connection reset; `pipeline-status` opened issue #5 and the passing rerun closed it. A forced second deploy rebuilt nothing and recorded itself in dev's tracker as a succeeded development deployment. Follow-ups in PR #6: pre-pull CI images with retries, the skipped deploy job's name, and `APP_VERSION` in recorded release labels |
+| Operations (B7) | 🔨 Built: `rollback.yml`, `seed.yml`, [`RUNBOOK.md`](RUNBOOK.md), and GitHub releases (`release-<version>` tags, C21). The first release is tagged; the rollback drill is next |
 | Everything else | ⏳ Not started. The build order is in §10 |
 
 ## 1. Summary
@@ -505,13 +506,13 @@ Starting the service at zero tasks avoids Beacon's first-deploy churn, where ins
 
 Beacon's model, applied to ECS:
 
-- **Target:** a commit SHA, a release `version`, or by default the **previous release**, read from the `release-version` parameter's history (`get-parameter-history`).
+- **Target:** a commit SHA, a release `version` or its GitHub tag `release-<version>` (C21), or by default the **previous release**, read from the `release-version` parameter's history (`get-parameter-history`).
 - **Rules**, all checked before anything changes:
   - **published:** the target's images are in ECR;
   - **proven:** the target has run in this environment before (dev may override; stage and prod can't);
   - **schema:** if `api/alembic/versions/` differs between the running release and the target, the target must be the previous release, or `allow_schema_change` must be set.
 - **Also required:** a **reason**, recorded in the job summary. **`dry_run`** checks everything and changes nothing.
-- **Rollout:** repeat steps 8–12 of the deploy flow with the target's images. If the rollout fails, the service returns to the release that was running. **Rollbacks never run migrations.**
+- **Rollout:** repeat steps 8–12 of the deploy flow with the target's images, rendering the task definition from the **target's own commit**, so it runs exactly what that release ran. If the rollout fails, the service returns to the release that was running. **Rollbacks never run migrations.** A rollback is recorded in the tracker as a **remediation** deployment (C20).
 
 The circuit breaker (§6.4) already covers the most common case, new tasks never becoming healthy, without a human.
 
@@ -630,3 +631,5 @@ Each milestone ends working, with its checks passing. Workflow changes go throug
 | C17 | The bootstrap role manages only the state bucket, the ECR repositories, the deploy roles and policies, and the task boundary. It has no ECS, EC2, RDS, or Secrets Manager access | It's the most trusted role (it creates roles), so it holds nothing that runs or reaches data. IAM lets it write policies granting actions it doesn't hold itself | Giving it the deploy roles' permissions too |
 | C18 | Deploy steps are stdlib Python (`scripts/deploy/`), one CLI with a subcommand per step, calling AWS only through the AWS CLI at a single function the tests replace with a fake that keeps state | JSON rendering, parameter history, and rollback rules are clearer and testable in Python; it's the `record_deploy.py` pattern (D58); the fake checks the exact arguments each call sends | Beacon's bash with `jq` (untested); boto3 (a dependency on the runner) |
 | C19 | Two execution roles per environment: `…-task-exec` (app, migrate, seed) and `…-db-bootstrap-exec` (also reads the RDS master secret). One task role with no permissions | Only the one-off bootstrap task ever needs the master password | One execution role that can read every secret |
+| C20 | A rollback is recorded in the environment's tracker as a remediation deployment of the target's commit, and renders the target's own task-definition template | A rollback is an unplanned fix, which is what the rework rate counts; rendering from the target's commit runs exactly what that release ran, including its environment variables | Not recording rollbacks; rendering the target's images with today's template |
+| C21 | Each release is tracked on GitHub: the first successful deploy of a release tags its commit `release-<version>` and publishes a pre-release (pre-release until it reaches prod). Rollback accepts the tag as a target | Releases are visible and linkable next to the code, with the commit, images, and deploy run; the content-hash version stays the identity, so tags and ECR agree | Semantic version tags (the version is a content hash, §7.1); tagging every deploy |

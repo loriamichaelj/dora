@@ -150,6 +150,19 @@
   outline: none;
 }
 
+.footer {
+  width: 100%;
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 var(--space-5) var(--space-5);
+  color: var(--color-muted);
+  font-size: 12.5px;
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
 @media (max-width: 900px) {
   .brandName {
     display: none;
