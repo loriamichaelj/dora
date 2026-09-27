@@ -63,6 +63,35 @@ jobs:
           npm ci --no-audit --no-fund
           npx playwright install --with-deps chromium
 
+      # Docker Hub drops a connection now and then, and one failed pull fails
+      # the whole suite: a reset while pulling the Testcontainers reaper image
+      # once errored 116 tests. Pull everything make ci needs first, with
+      # retries. The list is read from the Dockerfiles, compose.yaml, and
+      # Testcontainers itself, so it can't drift from what's actually used.
+      - name: Pre-pull images
+        run: |
+          ryuk="$(cd api && uv run --locked python -c 'from testcontainers.core.config import testcontainers_config as c; print(c.ryuk_image)')"
+          images="$(
+            {
+              sed -n 's/^# syntax=//p' api/Dockerfile web/Dockerfile db/Dockerfile
+              grep -hE '^FROM ' api/Dockerfile web/Dockerfile db/Dockerfile | awk '{print $2}'
+              sed -n 's/^ARG PYTHON_IMAGE=//p' api/Dockerfile
+              grep -hE '^[[:space:]]+image: ' compose.yaml | awk '{print $2}'
+              echo "${ryuk}"
+            } | grep -v -e '[$]' -e ':local$' | sort -u
+          )"
+          for image in ${images}; do
+            for attempt in 1 2 3 4; do
+              if docker pull --quiet "${image}"; then break; fi
+              if [ "${attempt}" = 4 ]; then
+                echo "::error::Couldn't pull ${image} after ${attempt} attempts"
+                exit 1
+              fi
+              echo "::warning::Pulling ${image} failed (attempt ${attempt}); retrying"
+              sleep $((attempt * 10))
+            done
+          done
+
       - name: make ci
         run: make ci
         env:

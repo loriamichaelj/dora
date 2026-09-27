@@ -193,7 +193,9 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   deploy:
-    name: ${{ needs.prepare.outputs.mode == 'validate' && 'Validate' || 'Deploy' }} ${{ needs.prepare.outputs.environment }}
+    # From inputs, not needs: a skipped job never gets needs outputs, and its
+    # name would show the raw expression.
+    name: ${{ inputs.mode == 'validate' && 'Validate' || 'Deploy' }} ${{ inputs.environment || 'dev' }}
     needs: [prepare, test, build]
     # test and build are skipped where they don't apply; anything else must pass.
     if: >-
@@ -232,9 +234,12 @@ jobs:
             stage) tracker_env=staging ;;
             prod) tracker_env=production ;;
           esac
+          # APP_VERSION as the images carry it: record_deploy.py labels the
+          # release <APP_VERSION>+<sha12> (Phase A D71), as `make up` does.
           {
             echo "TRACKER_ENV=${tracker_env}"
             echo "RELEASE_JSON=${RUNNER_TEMP}/release.json"
+            echo "APP_VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' api/pyproject.toml)"
           } >> "$GITHUB_ENV"
 
       - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
