@@ -19,7 +19,7 @@ a laptop. Run workflows from the Actions tab, or with `gh workflow run <file>
 | Deploy settings | SSM `/loria-dora/dev/deploy-config` ([contract](../deploy/ecs/README.md)) |
 | Logs | CloudWatch `/loria-dora/dev/app` (streams `api/…`, `web/…`), `/loria-dora/dev/jobs` (one-off tasks) |
 | Images | ECR `loria-dora/api`, `loria-dora/web`, `loria-dora/dbinit`, tagged `<version>` and `sha-<commit>` |
-| Releases | GitHub tags `release-<version>` with a pre-release each, created by the first deploy of a release |
+| Releases | GitHub tags `release-<version>`: a pre-release each, created by the first deploy of a release; official releases are promoted by hand (below) |
 
 `/version` on the app, and the footer of every page, show the commit that's running.
 
@@ -39,7 +39,11 @@ reviewer, so it starts at once. About 15 minutes.
 - **Self-tracking:** every deploy records itself in dev's own tracker as a `dora-tracker`
   development deployment, best effort (§7.6).
 - **GitHub release:** the first deploy of a release tags its commit `release-<version>` and
-  publishes a pre-release.
+  publishes a pre-release. To make a deployed release **official**, promote it and add notes
+  on what changed:
+  ```sh
+  gh release edit release-<version> --repo loriamichaelj/dora --prerelease=false --latest --notes-file notes.md
+  ```
 - **Which commit runs:** the one the release's images were built from. A later commit with
   the same app code (say, a docs change) redeploys those images, so `/version`, the smoke test,
   self-tracking, and the release tag all use the build commit; the job summary shows both.

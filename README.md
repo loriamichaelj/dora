@@ -158,7 +158,7 @@ Only **dev** exists: stage and prod are designed but not provisioned. Everything
 | `terraform.yml`, `bootstrap.yml` | plan, apply, or destroy the Terraform roots |
 | `ci.yml` | lints the workflows on every PR into `main` |
 
-**Releases** are tracked on GitHub: the first deploy of a release tags its commit `release-<version>` and publishes a pre-release. A failed deploy or rollback opens a `[dev] pipeline failure` issue, which the next success closes.
+**Releases** are tracked on GitHub: the first deploy of a release tags its commit `release-<version>` and publishes a pre-release; an official release is a pre-release promoted by hand. The latest official release is [`release-c225e7a93a13`](https://github.com/loriamichaelj/dora/releases/latest). A failed deploy or rollback opens a `[dev] pipeline failure` issue, which the next success closes.
 
 ## Branches
 
