@@ -117,6 +117,10 @@ Plan first; read the plan; then apply.
 `terraform.yml` refuses to run if the state key, the environment, and the `.tfvars` file
 disagree, and fails cleanly for stage and prod, which have no `.tfvars` yet.
 
+**Changing a workflow** (anything in `.github/` on `main`): branch `workflows/<name>` from
+`main`, change it, and open a PR into `main`. **Lint workflows** (actionlint) must pass
+before it can merge. Keep the branch after merging.
+
 Things to know:
 
 - **The account's VPC quota is full** (5 in us-east-1). A new VPC needs a Service Quotas

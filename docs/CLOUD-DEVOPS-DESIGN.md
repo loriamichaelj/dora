@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Author** | M.L. |
-| **Status** | v0.16: B0–B7 done; dev serves the app, rolls back, and tracks its releases. B8 skipped by decision: documented (§10.1), not run (§0, §10). Open items 1–2 resolved. **Dev only: one ECS cluster** |
-| **Date** | 2026-09-25 |
-| **Depends on** | [`3T-APP-DESIGN.md`](3T-APP-DESIGN.md) v1.0. Phase A is complete: the app runs and is fully tested on localhost, and it meets the portability constraints in §14 of that document. |
+| **Status** | v0.17: B0–B7 done; dev serves the app, rolls back, and tracks its releases. B8 skipped by decision: documented (§10.1), not run. Stage, prod, and DNS aren't planned yet (§0, §10). Open items 1–2 resolved. **Dev only: one ECS cluster** |
+| **Date** | 2026-09-25 (updated 2026-09-27) |
+| **Depends on** | [`3T-APP-DESIGN.md`](3T-APP-DESIGN.md) v1.2 (v1.2 lists the Phase A changes this phase made, §8). Phase A is complete: the app runs and is fully tested on localhost, and it meets the portability constraints in §14 of that document. |
 | **Reference** | Beacon, `~/Code/CloudDevOps/AWS/three-tier-app-ec2/beacon`, [`docs/CLOUD-DEVOPS-DESIGN.md`](https://github.com/loriamichaelj/beacon/blob/dev/docs/CLOUD-DEVOPS-DESIGN.md). Dora follows Beacon's branch, workflow, bootstrap, state, and IAM patterns. The difference is compute: **ECS on Fargate** instead of EC2 instances, an AMI, and S3 tarballs. |
 | **Scope** | Branch, workflow, environment, and infrastructure strategy for running Dora on AWS. **Only the `dev` environment is deployed for now**; stage and prod are designed but not provisioned. |
 | **Out of scope** | EKS, multi-region, a custom domain and HTTPS (deferred until a domain exists, §6.10), CDN hosting of the SPA. |
@@ -16,6 +16,7 @@
 
 | Area | State |
 |---|---|
+| Live now | Dev serves release `97231f537c0b` (commit `2c710a7`) at http://loria-dora-dev-alb-1183097088.us-east-1.elb.amazonaws.com, seeded with demo data, recording its own deploys and rollbacks. Releases: `release-1ea500270995`, `release-97231f537c0b` (GitHub pre-releases). About $110/month (§9) |
 | Branches and protection (§3) | ✅ Done in Phase A setup: `main`, `dev`, `stage`, `prod`; `main`, `stage`, and `prod` accept changes only through pull requests |
 | Scope | **Dev only.** One ECS cluster (`loria-dora-dev`); no stage or prod clusters, databases, load balancers, or subnets. Stage and prod appear in this design so adding them later is configuration, not redesign |
 | This design | ✅ Reviewed (B0) |
@@ -27,7 +28,7 @@
 | First deploy (B6) | ✅ 2026-09-27: release `1ea500270995` deployed to dev (db bootstrap over `verify-full`, migration 0001, rollout, curl and browser smoke tests). The first attempt's tests failed on a Docker Hub connection reset; `pipeline-status` opened issue #5 and the passing rerun closed it. A forced second deploy rebuilt nothing and recorded itself in dev's tracker as a succeeded development deployment. Follow-ups in PR #6: pre-pull CI images with retries, the skipped deploy job's name, and `APP_VERSION` in recorded release labels |
 | Operations (B7) | ✅ 2026-09-27: `rollback.yml`, `seed.yml`, [`RUNBOOK.md`](RUNBOOK.md), GitHub releases (C21). Release 2 (`97231f537c0b`, the version footer) deployed and published; the rollback was drilled both ways (dry run; back to `1ea500270995`; forward by its tag), each recorded as a remediation deployment; the seed loaded 1,221 demo deployments, and `dora-tracker`'s own records were byte-for-byte unchanged. The drill found and fixed three pipeline bugs (below) |
 | Teardown and rebuild (B8) | ⏭️ B8 skipped by decision (2026-09-27): documented in §10.1 and the runbook, not run. Dev stays up |
-| Everything else | ⏳ Not started. The build order is in §10 |
+| Not planned yet | ⏳ Stage and prod (their `.tfvars`, `promote.yml`, validate mode), DNS and HTTPS (§6.10), and the deferred items in §11 |
 
 ## 1. Summary
 
@@ -58,7 +59,7 @@ These carry over from Beacon unchanged. When a decision comes up that this docum
 | `stage` | What was promoted from `dev` by PR. | PR required; no direct push, no force push, no deletion. |
 | `prod` | What was promoted from `stage` by PR. | Same as `stage`. |
 
-**`main` is outside the promotion chain.** It never receives a PR from `dev`, `stage`, or `prod`, and never sends one. Workflow changes go on a `workflows/<name>` branch and reach `main` by PR, as in Beacon (PRs #1–#12 there).
+**`main` is outside the promotion chain.** It never receives a PR from `dev`, `stage`, or `prod`, and never sends one. Workflow changes go on a `workflows/<name>` branch and reach `main` by PR, as in Beacon (PRs #1–#12 there). Dora's are PRs #1–#10 (#5 and #8 are the pipeline-failure issues); every `workflows/*` branch is kept after merging.
 
 ### 3.2 Promotion flow
 

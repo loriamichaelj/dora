@@ -3,11 +3,11 @@
 | | |
 |---|---|
 | **Author** | M.L. |
-| **Status** | v1.1: Phase A complete (BOOO M0–M11 done; §16 met); frontend restyled |
-| **Date** | 2026-09-25 |
+| **Status** | v1.2: Phase A complete (BOOO M0–M11 done; §16 met). Since then: the frontend restyle (v1.1) and the Phase A code changes Phase B needed (v1.2) |
+| **Date** | 2026-09-25 (updated 2026-09-27) |
 | **Scope** | Phase A — full stack running end-to-end and tested on localhost via Docker Compose |
 | **Out of scope** | Phase B (AWS, IaC, GitHub Actions CI/CD, container orchestration, SSO) |
-| **Phase B target** | AWS + GitHub Actions. Phase A honors the portability constraints in §14 but does no Phase B work. |
+| **Phase B** | **Built**: the app runs on AWS (ECS on Fargate, RDS, GitHub Actions with OIDC) in a dev environment. See [`CLOUD-DEVOPS-DESIGN.md`](CLOUD-DEVOPS-DESIGN.md) and [`RUNBOOK.md`](RUNBOOK.md). Phase A itself honored §14's constraints and did no Phase B work; the few Phase A changes Phase B needed are listed under v1.2. |
 
 ### Changelog
 | Version | Changes |
@@ -30,6 +30,7 @@
 | v0.16 | M11 decisions (D71–D75): release label format; no-op reruns and side-effect-free dry runs; script lint and tests on Python 3.10; `--repo`; scenario 10 compares commit sets. All ten E2E scenarios pass. |
 | v1.0 | Phase A Definition of Done (§16) met: every item ticked with the evidence recorded beside it. |
 | v1.1 | Frontend restyle in Beacon's design language, with dark mode (D76). No behavior or API change; all web and E2E tests pass unchanged. |
+| v1.2 | Phase A code changed for Phase B (cloud design §8, B4–B7): the RDS CA bundle, pinned by checksum, in the `api` image; the `dbinit` image (`db/Dockerfile`, `db/run-bootstrap.sh`) and a `dbinit` Compose profile; `make e2e` also reruns the bootstrap with it, loads the CA bundle as each image's non-root user, and runs the curl and browser smoke tests (`scripts/deploy/smoke_test.py`, `web/e2e/deployed.smoke.ts`). The UI's footer shows the running version and commit (§8). `record_deploy.py` recognizes a rollback (HEAD older than the last recorded build) and records no commits for it. |
 
 ---
 
@@ -484,6 +485,7 @@ Query parameters: `service_id` (optional; omit for org-wide), `environment` (def
 - Mutations send `If-Match: "<version>"`, using the `version` from the response body. On `412`, show "This record was changed by someone else" and refetch.
 - Render problem+json errors: field errors appear inline, and anything else appears in a toast showing the `X-Request-ID`.
 - Loading, empty, and error states exist for every data view.
+- **Version footer (v1.2):** every page's footer shows the running app version and short commit, from `/version`, so a deploy or rollback is visible in the browser. It's hidden if `/version` doesn't answer.
 - Accessibility: semantic HTML, labeled inputs, keyboard-navigable dialogs, and badges that carry text rather than relying on color alone.
 - **Look and feel (D76):** Beacon's design language: a sticky header with icon nav, a theme toggle, and a *New deployment* action; a 7/30/90/custom segmented control for the dashboard window; metric cards whose left accent matches the band; pill badges; and uppercase table headers. The page chrome makes no API requests of its own. Every color reads a token, and dark mode follows the OS unless the toggle overrides it.
 - The API base is always the relative `/api/v1`. In dev mode the Vite dev server **proxies** `/api` to the API, so there is no CORS configuration anywhere.
@@ -673,6 +675,7 @@ Layering rule: routers → services → repositories. Routers never touch the OR
 | Security | pytest | the `dora_app` role cannot run DDL; `/metrics` isn't reachable via nginx; the ingest endpoint rejects a missing or bad key | must pass |
 | Self-tracking script | pytest with temporary git repos + a stub HTTP server, run on Python 3.10 (D73) | commit-range selection (first run, normal, rebased history, dirty tree), payload shape, idempotent `external_id`, `/version` SHA mismatch → `failed`, API unreachable → exit 0 with a warning when `--best-effort` is set | must pass |
 | Unit (web) | Vitest + Testing Library | metric cards (including null states and the null rework band), forms, If-Match / 412 handling | key components covered |
+| Deploy scripts (Phase B) | pytest with a fake AWS CLI, on Python 3.10 | `scripts/deploy/ecs_deploy.py`: preflight, task-definition rendering, one-off tasks, rollout and the circuit breaker, the rollback rules; `smoke_test.py` against a fake site | must pass |
 | E2E | Playwright against the isolated Compose stack (`make e2e`) | §12.4, one worker, in order (scenario 7 stops the database); each test creates its own uniquely named service | all ten pass |
 | Performance (manual) | `make seed-large` then `make perf` | `/metrics/dora`, org-wide, 90-day window, 100k deployments: p95 < 500 ms locally | recorded in README. M7 result (Apple M2, OrbStack, 100,221 deployments, 87,882 counted): summary p95 **272 ms** (p50 250 ms), time series p95 330 ms; a cold first run measured p95 428 ms. Before D56 the summary p95 was 852 ms. |
 
@@ -835,7 +838,7 @@ If both pass, it posts `succeeded` with `finished_at = now`. If either fails, it
 - The GitHub Actions deploy job calls the **same script**: `--status in_progress` before deploying, then `--status succeeded|failed` afterwards, with `--external-id gha-${{ github.run_id }}-${{ github.run_attempt }}-<env>` and `--environment production`.
 - The script must never fail the deploy job. Run it with `--best-effort` and a short timeout with retries (3 attempts, exponential backoff, 5s per-request timeout).
 - A deploy that breaks the tracker can't record its own `succeeded`. The failure is visible as a deployment stuck in `in_progress`. **Phase B will need a staleness check** (e.g. `in_progress` for more than 60 min is flagged in the UI). That check is noted here and deferred to Phase B.
-- In Phase B, `POST /services` may require auth, so `--ensure-service` will be off in CI and the service will be created once by an operator.
+- In Phase B, `POST /services` may require auth, so `--ensure-service` will be off in CI and the service will be created once by an operator. *(As built: `deploy.yml` passes `--no-ensure-service`, and `dora-tracker` was created once in dev's UI. Rollbacks are recorded too, as remediation deployments.)*
 
 ---
 

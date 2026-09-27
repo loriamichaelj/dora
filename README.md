@@ -1,8 +1,18 @@
 # DORA Deployment Tracker
 
-A three-tier web app that records deployments, the commits they ship, and the production failures they cause, and computes the five DORA software delivery metrics from that data. It also records its own builds, through its own API.
+A three-tier web app that records deployments, the commits they ship, and the production failures they cause, and computes the five DORA software delivery metrics from that data. It also records its own builds and deploys, through its own API.
 
-The design, every decision, and the build order (**BOOO**) live in [`docs/3T-APP-DESIGN.md`](docs/3T-APP-DESIGN.md). This README is the practical guide.
+It runs locally with Docker Compose, and on AWS (ECS on Fargate, RDS, GitHub Actions with OIDC) in a **dev** environment: http://loria-dora-dev-alb-1183097088.us-east-1.elb.amazonaws.com.
+
+| Document | What's in it |
+|---|---|
+| [`docs/3T-APP-DESIGN.md`](docs/3T-APP-DESIGN.md) | The app (Phase A): design, every decision, and its build order (**BOOO** M0–M11, all done) |
+| [`docs/CLOUD-DEVOPS-DESIGN.md`](docs/CLOUD-DEVOPS-DESIGN.md) | AWS and the pipeline (Phase B): design, decisions, and its build order (B0–B7 done; B8 skipped) |
+| [`docs/RUNBOOK.md`](docs/RUNBOOK.md) | Operating it on AWS: deploy, roll back, seed, failed pipelines, infrastructure changes, cost |
+| [`infra/bootstrap/README.md`](infra/bootstrap/README.md) | The one-time manual AWS and GitHub setup |
+| [`deploy/ecs/README.md`](deploy/ecs/README.md) | The ECS task-definition templates and the `deploy-config` contract |
+
+This README is the practical guide.
 
 ## Quick start
 
@@ -40,11 +50,11 @@ The stack binds host ports 8080 (web), 8000 (API), and 5432 (PostgreSQL) on `127
                                  ◄── seed    (demo data, one-shot, on demand)
 ```
 
-Startup order is enforced by Compose: `db` healthy → `migrate` exits 0 → `api` healthy → `web`. The browser only ever talks to one origin, so there's no CORS configuration anywhere. Everything is configured through environment variables (see [`.env.example`](.env.example) and §9 of the design doc), so the same images run unchanged on AWS in Phase B.
+Startup order is enforced by Compose: `db` healthy → `migrate` exits 0 → `api` healthy → `web`. The browser only ever talks to one origin, so there's no CORS configuration anywhere. Everything is configured through environment variables (see [`.env.example`](.env.example) and §9 of the design doc), so the same images run unchanged on AWS ([below](#on-aws)).
 
 | Tier | Stack |
 |---|---|
-| Web | React 19, TypeScript (strict), Vite, TanStack Query, React Router, React Hook Form + Zod, Recharts; a typed client generated from the API's OpenAPI schema |
+| Web | React 19, TypeScript (strict), Vite, TanStack Query, React Router, React Hook Form + Zod, Recharts; a typed client generated from the API's OpenAPI schema; light and dark themes; every page's footer shows the running version and commit |
 | API | Python 3.13, FastAPI, SQLAlchemy 2 (async) + asyncpg, Pydantic v2, structlog JSON logs, Prometheus metrics |
 | Data | PostgreSQL 18 (UUIDv7 keys), Alembic migrations, least-privilege roles that also work on Amazon RDS |
 
@@ -66,10 +76,10 @@ Every target is non-interactive and exits non-zero on failure, so CI can call th
 | `make test` | API, script, and web tests, then E2E |
 | `make test-api` / `make test-scripts` / `make test-web` / `make e2e` | each suite on its own; reports go to `reports/` |
 | `make perf` | time the org-wide 90-day DORA summary (after `make seed-large`) |
-| `make build-multiarch` | build both images for `linux/amd64` and `linux/arm64` |
+| `make build-multiarch` | build the `api`, `web`, and `dbinit` images for `linux/amd64` and `linux/arm64` |
 | `make ci` | `lint`, `openapi-check`, `test`: the single entry point for CI |
 
-`make e2e` runs in its own Compose project (`dora-e2e`, ports 18080/18000/15432, its own volume and [env file](web/e2e/e2e.env)). It resets, seeds, tests, and tears down without touching the dev stack, which can keep running.
+`make e2e` runs in its own Compose project (`dora-e2e`, ports 18080/18000/15432, its own volume and [env file](web/e2e/e2e.env)). It resets, seeds, tests, and tears down without touching the dev stack, which can keep running. After the Playwright scenarios it also checks what AWS deploys rely on: it reruns the database bootstrap with the `dbinit` image, loads the RDS CA bundle as each image's non-root user, and runs the same curl and browser smoke tests the deploy pipeline runs.
 
 ## The metrics
 
@@ -99,7 +109,8 @@ Every `make up` from a clean working tree records the build as a deployment of t
 - It records `succeeded` only if `/readyz` answers and `/version` reports exactly your `HEAD`; otherwise `failed`, so a stale container shows up as a failure rather than a false success.
 - A working tree with uncommitted changes isn't recorded (its build can't be reproduced from a SHA). `make up` just warns; `python3 scripts/record_deploy.py --allow-dirty` records it without commits.
 - Recording never fails `make up`. Rerunning it for the same build changes nothing.
-- These numbers mean "commit → running on my laptop": useful dogfooding, not a delivery-performance signal. In Phase B, the deploy pipeline runs the same script against real environments.
+- These numbers mean "commit → running on my laptop": useful dogfooding, not a delivery-performance signal.
+- On AWS, the deploy pipeline runs the same script against the environment it deploys, recording each deploy as a `dora-tracker` deployment (planned) and each rollback as a remediation deployment. It passes `--no-ensure-service`, so `dora-tracker` is created once in that environment's UI.
 
 `make e2e` runs in its own stack, so it never touches this history; `make reset` does erase it.
 
@@ -108,9 +119,10 @@ Every `make up` from a clean working tree records the build as a deployment of t
 | Suite | Tool | Notes |
 |---|---|---|
 | API unit + integration | pytest against real PostgreSQL 18 (Testcontainers) | includes golden datasets A–C for the metrics engine; coverage ≥ 80% enforced |
-| Scripts | pytest with throwaway git repos and a fake API, on **Python 3.10** | `record_deploy.py`: commit ranges, dirty trees, status, idempotency, failures |
+| Scripts | pytest with throwaway git repos, a fake API, and a fake AWS CLI, on **Python 3.10** | `record_deploy.py` (commit ranges, rollbacks, dirty trees, status, idempotency); the deploy scripts in `scripts/deploy/` (preflight, task definitions, one-off tasks, rollout and the circuit breaker, the rollback rules, smoke tests) |
 | Web | Vitest + Testing Library | components, forms, error handling, conflicts; runs in a US Pacific time zone to catch UTC bugs |
 | E2E | Playwright | the ten scenarios in §12.4 of the design doc |
+| Smoke | `scripts/deploy/smoke_test.py` (curl-level) and a read-only Playwright spec ([`web/e2e/deployed.smoke.ts`](web/e2e/deployed.smoke.ts)) | run by `make e2e` locally and by every AWS deploy and rollback |
 
 ## Performance
 
@@ -121,6 +133,33 @@ Every `make up` from a clean working tree records the build as a deployment of t
 | `/api/v1/metrics/dora` (org-wide, 90 days) | 250 ms | **272 ms** | p95 < 500 ms |
 | `/api/v1/metrics/dora/timeseries` (weekly) | 307 ms | 330 ms | — |
 
+## On AWS
+
+```
+ Browser ──HTTP:80──► ALB (public subnets)
+                        │ :8080
+                        ▼
+                      ECS on Fargate, ARM64 (private subnets, no internet route)
+                        task: web (nginx + SPA) ──127.0.0.1:8000──► api (FastAPI)
+                        │ :5432, TLS verify-full
+                        ▼
+                      RDS PostgreSQL 18
+   one-off tasks: db-bootstrap, migrate, seed      images, logs, secrets: VPC endpoints
+```
+
+Only **dev** exists: stage and prod are designed but not provisioned. Everything is Terraform, applied by GitHub Actions through OIDC; there are no AWS keys anywhere, and nothing runs from a laptop. The design is [`docs/CLOUD-DEVOPS-DESIGN.md`](docs/CLOUD-DEVOPS-DESIGN.md); day-to-day operation is [`docs/RUNBOOK.md`](docs/RUNBOOK.md).
+
+| Workflow (on `main`) | Does |
+|---|---|
+| `dev-ci` (a stub on `dev`) → `test.yml` | `make ci` on every push to `dev` |
+| `deploy.yml` | builds once (arm64 images in ECR, keyed by a hash of the `api/`, `web/`, and `db/` trees), then preflight, database bootstrap, migrations, a rolling update, and smoke tests; records the deploy in dev's own tracker |
+| `rollback.yml` | rolls back to an earlier release, with rules checked first and a dry run; never migrates |
+| `seed.yml` | loads the demo data into dev |
+| `terraform.yml`, `bootstrap.yml` | plan, apply, or destroy the Terraform roots |
+| `ci.yml` | lints the workflows on every PR into `main` |
+
+**Releases** are tracked on GitHub: the first deploy of a release tags its commit `release-<version>` and publishes a pre-release. A failed deploy or rollback opens a `[dev] pipeline failure` issue, which the next success closes.
+
 ## Branches
 
-All work happens on `dev`. `stage` and `prod` only change through pull requests (dev → stage → prod), and `main` holds only the GitHub Actions workflows for Phase B.
+All work happens on `dev`. `stage` and `prod` only change through pull requests (dev → stage → prod), and `main` holds only the GitHub Actions workflows: each change reaches it by a PR from a `workflows/<name>` branch, which is kept after merging, and the **Lint workflows** check must pass first.

@@ -13,6 +13,11 @@ every name carries a project prefix, and IAM names must start with `cloudbatch81
 All AWS access runs through GitHub Actions. This root is only ever applied by the
 `bootstrap.yml` workflow on `main`, never from a laptop.
 
+**State:** Applied 2026-09-26 (BOOO B2); the second apply was a no-op. The manual steps
+below are done: the bootstrap role exists, and all five GitHub Environments have their
+reviewers, `main`-only deployment branches, and `AWS_ROLE_ARN` secrets. From here, this root
+changes only when a role needs a permission (see "After the first apply").
+
 ## What each role can do
 
 | Role | Scope |
