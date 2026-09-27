@@ -48,7 +48,7 @@ export function DashboardPage() {
     <div className={styles.page}>
       <header className={styles.heading}>
         <div>
-          <h1>DORA metrics</h1>
+          <h1>DORA Metrics</h1>
           <p className={styles.subtitle}>
             Software delivery performance for {filters.environment}
             {summary.data?.window && `, ${plural(Math.round(summary.data.window.days), 'day')}`}.

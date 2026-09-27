@@ -9,7 +9,7 @@ test('1. cold start: dashboard loads; healthz, readyz, and version answer', asyn
 }) => {
   // `make e2e` starts this project from an empty volume (down -v, then up).
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: 'DORA metrics' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'DORA Metrics' })).toBeVisible();
   await expect(page.getByRole('article', { name: 'Deployment frequency' })).toBeVisible();
 
   expect((await request.get('/healthz')).status()).toBe(200);

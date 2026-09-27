@@ -36,7 +36,7 @@ async function settled(page: Page, heading?: string): Promise<void> {
 }
 
 const PAGES = [
-  ['/', 'DORA metrics'],
+  ['/', 'DORA Metrics'],
   ['/services', 'Services'],
   ['/deployments', 'Deployments'],
   ['/failures', 'Failures'],
