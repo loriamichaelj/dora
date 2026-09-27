@@ -139,9 +139,10 @@ zero tasks and the first deploy scales it). The next section is the full drill.
 
 ## Tear down and rebuild dev
 
-The B8 drill (design §10.1): prove dev comes back from nothing, from code alone.
-**Planned, not yet run;** it waits on design open items 7–10 (the database's data, the
-network's scope, self-tracking, cost reporting). Decide those first.
+The procedure for tearing dev down and rebuilding it from code alone (design §10.1).
+**Skipped as a Phase B milestone (B8) and never run;** it's here for when it's needed. Before
+using it, decide design open items 7–10: the database's data, the network's scope,
+self-tracking, and cost reporting.
 
 **Before you start:**
 

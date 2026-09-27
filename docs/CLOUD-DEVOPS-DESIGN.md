@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Author** | M.L. |
-| **Status** | v0.15: B0–B7 done; dev serves the app, rolls back, and tracks its releases. B8, the teardown and rebuild drill, is planned (§10.1) and waits on open items 7–10 (§0, §10). Open items 1–2 resolved. **Dev only: one ECS cluster** |
+| **Status** | v0.16: B0–B7 done; dev serves the app, rolls back, and tracks its releases. B8 skipped by decision: documented (§10.1), not run (§0, §10). Open items 1–2 resolved. **Dev only: one ECS cluster** |
 | **Date** | 2026-09-25 |
 | **Depends on** | [`3T-APP-DESIGN.md`](3T-APP-DESIGN.md) v1.0. Phase A is complete: the app runs and is fully tested on localhost, and it meets the portability constraints in §14 of that document. |
 | **Reference** | Beacon, `~/Code/CloudDevOps/AWS/three-tier-app-ec2/beacon`, [`docs/CLOUD-DEVOPS-DESIGN.md`](https://github.com/loriamichaelj/beacon/blob/dev/docs/CLOUD-DEVOPS-DESIGN.md). Dora follows Beacon's branch, workflow, bootstrap, state, and IAM patterns. The difference is compute: **ECS on Fargate** instead of EC2 instances, an AMI, and S3 tarballs. |
@@ -26,7 +26,7 @@
 | Dev infrastructure (B5) | ✅ Applied 2026-09-26 as `deploy-dev` (34 resources; RDS took 9.5 minutes): the ALB, the `loria-dora-dev` cluster and the service at 0 tasks, RDS PostgreSQL 18.3, the secrets, the task roles, the log groups, and `deploy-config`. The ALB answers 503 until the first deploy |
 | First deploy (B6) | ✅ 2026-09-27: release `1ea500270995` deployed to dev (db bootstrap over `verify-full`, migration 0001, rollout, curl and browser smoke tests). The first attempt's tests failed on a Docker Hub connection reset; `pipeline-status` opened issue #5 and the passing rerun closed it. A forced second deploy rebuilt nothing and recorded itself in dev's tracker as a succeeded development deployment. Follow-ups in PR #6: pre-pull CI images with retries, the skipped deploy job's name, and `APP_VERSION` in recorded release labels |
 | Operations (B7) | ✅ 2026-09-27: `rollback.yml`, `seed.yml`, [`RUNBOOK.md`](RUNBOOK.md), GitHub releases (C21). Release 2 (`97231f537c0b`, the version footer) deployed and published; the rollback was drilled both ways (dry run; back to `1ea500270995`; forward by its tag), each recorded as a remediation deployment; the seed loaded 1,221 demo deployments, and `dora-tracker`'s own records were byte-for-byte unchanged. The drill found and fixed three pipeline bugs (below) |
-| Teardown and rebuild (B8) | 📝 Planned in §10.1, not run. Waits on open items 7–10 |
+| Teardown and rebuild (B8) | ⏭️ B8 skipped by decision (2026-09-27): documented in §10.1 and the runbook, not run. Dev stays up |
 | Everything else | ⏳ Not started. The build order is in §10 |
 
 ## 1. Summary
@@ -586,11 +586,13 @@ Each milestone ends working, with its checks passing. Workflow changes go throug
 | **B5** | dev infrastructure: `infra/env/` + `environments/dev.tfvars`, `terraform.yml target=infra` | Cluster, ALB, RDS, secrets, and the zero-task service exist in dev ✅ | — |
 | **B6** | `deploy.yml` + `pipeline-status`: the first dev deploy | Dev serves the app at its ALB URL; smoke tests pass; the second deploy is recorded by the tracker ✅ | Create `dora-tracker` in dev's UI once ✅ |
 | **B7** | `rollback.yml`, `seed.yml`, `docs/RUNBOOK.md` | Rollback drilled (back and forth); seed loads; runbook written ✅ | — |
-| **B8** | Cost and resilience drills: tear dev down and rebuild it from scratch | Rebuilt with no manual steps beyond approvals; costs recorded | — |
+| **B8** | Cost and resilience drills: tear dev down and rebuild it from scratch | ⏭️ Skipped by decision; documented only (§10.1) | — |
 
 **Later, not planned yet:** stage and prod (their `.tfvars`, the `promote.yml` stub, validate mode), DNS and HTTPS.
 
-### 10.1 B8: teardown and rebuild drill (planned, not run)
+### 10.1 B8: teardown and rebuild drill (skipped; documented only)
+
+**Status: skipped by decision (2026-09-27).** B8 isn't run and won't be as part of Phase B. This plan and open items 7–10 are kept as reference for tearing dev down or rebuilding it later; the runbook's "Tear down and rebuild dev" section is the procedure. The §9 costs remain estimates.
 
 **Purpose.** Prove dev can be torn down to nothing and rebuilt from code alone, and replace §9's estimate with real costs. Done when dev is rebuilt with no manual steps beyond approvals and starting runs, and costs and times are recorded.
 
@@ -645,6 +647,8 @@ Each milestone ends working, with its checks passing. Workflow changes go throug
 4. **Dev cost options:** one-AZ endpoints and/or Fargate Spot (§9). The default here is neither.
 5. **Prod wait timer** on its Environment. Moot until prod exists.
 6. **Where each environment's deploys are recorded** once stage and prod exist: each environment's own tracker (this design), or one central tracker.
+Items 7–10 belong to B8, which is skipped (§10.1). They're kept for whoever runs it later; none needs deciding now.
+
 7. **Dev's data in B8** (§10.1). The teardown deletes the database, including `dora-tracker`'s real records. Options: (a) accept the loss, since dev is disposable by design; (b) snapshot it first (a small permission and workflow addition; restoring it would weaken "from scratch"); (c) export `dora-tracker`'s records through the API and re-import them after the rebuild.
 8. **The network in B8.** The account's us-east-1 is at its quota of 5 VPCs (§6.2). If another project in the shared account creates a VPC between the network's `destroy` and its rebuild, the rebuild fails with `VpcLimitExceeded`. Options: (a) request a quota increase first, then tear everything down; (b) drill only `infra` and keep the network: cheaper and safer, but the network's rebuild stays unproven.
 9. **Self-tracking without a manual step** (§10.1). Let dev's deploys create the `dora-tracker` service when it's missing (drop `--no-ensure-service` for dev), or keep creating it by hand, a manual step B8's done-when doesn't allow.
