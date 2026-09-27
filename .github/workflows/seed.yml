@@ -1,0 +1,67 @@
+name: seed
+run-name: seed dev
+
+# Load the Phase A demo data into dev (docs/CLOUD-DEVOPS-DESIGN.md §7.3) as a
+# one-off ECS task: `python -m app.seed --days 90 --seed 42`, as dora_app,
+# with the running release's api image (deploy/ecs/seed.json.tmpl).
+#
+# Rerunnable: the seeder replaces only its own demo services (checkout-api and
+# friends) and leaves everything else, such as dora-tracker's own deploys,
+# alone. Dev only: stage and prod never get demo data.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+# Shares the deploy queue, so it never races a rollout.
+concurrency:
+  group: deploy-dev
+  cancel-in-progress: false
+
+jobs:
+  seed:
+    name: Seed dev
+    runs-on: ubuntu-24.04
+    environment: dev
+    timeout-minutes: 20
+    env:
+      ENVIRONMENT: dev
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: dev
+          persist-credentials: false
+
+      - name: Load project config
+        run: |
+          while IFS='=' read -r key value; do
+            case "${key}" in ''|'#'*) continue ;; esac
+            echo "${key}=${value}" >> "$GITHUB_ENV"
+          done < infra/project.env
+          echo "RELEASE_JSON=${RUNNER_TEMP}/release.json" >> "$GITHUB_ENV"
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: seed-${{ github.run_id }}
+          mask-aws-account-id: true
+
+      # Seed with the release dev runs, so the seeder matches its schema.
+      - name: Resolve the running release
+        run: |
+          running="$(aws ssm get-parameter --name "/${NAME_PREFIX}/${ENVIRONMENT}/release-version" --query Parameter.Value --output text)"
+          if [ "${running}" = "none" ]; then
+            echo "::error::Nothing is deployed to dev yet; run deploy first."
+            exit 1
+          fi
+          echo "Seeding with release ${running}"
+          python3 scripts/deploy/ecs_deploy.py preflight --version "${running}" > "${RELEASE_JSON}"
+
+      - name: Seed
+        run: |
+          arn="$(python3 scripts/deploy/ecs_deploy.py register --family seed --release "${RELEASE_JSON}")"
+          python3 scripts/deploy/ecs_deploy.py run-task --task-definition "${arn}"
