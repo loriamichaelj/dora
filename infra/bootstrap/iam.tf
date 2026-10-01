@@ -466,11 +466,22 @@ data "aws_iam_policy_document" "env_containers" {
     }
   }
 
+  # Deregistering and deleting a task definition are authorized against `*`,
+  # not the revision's ARN (the ARN form is denied), so they can't be scoped to
+  # this environment's families. Terraform needs them to destroy the
+  # placeholder task definition.
   statement {
-    sid = "TaskDefinitionManageOwn"
+    sid = "TaskDefinitionDeregister"
     actions = [
       "ecs:DeregisterTaskDefinition",
       "ecs:DeleteTaskDefinitions",
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    sid = "TaskDefinitionManageOwn"
+    actions = [
       "ecs:TagResource",
       "ecs:UntagResource",
       "ecs:ListTagsForResource",
